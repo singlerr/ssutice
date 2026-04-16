@@ -78,7 +78,7 @@ export async function getNotices(
 
   const [rowsResult, countResult] = await Promise.all([
     db.execute({
-      sql: `SELECT * FROM notices ${whereClause} ORDER BY CASE WHEN date IS NULL THEN 1 ELSE 0 END, COALESCE(date, created_at) DESC, id DESC LIMIT ${limit} OFFSET ${offset}`,
+      sql: `SELECT * FROM notices ${whereClause} ORDER BY CASE WHEN date IS NULL THEN 1 ELSE 0 END, COALESCE(date, created_at) DESC, (id * 37 + 11) % 1000 DESC LIMIT ${limit} OFFSET ${offset}`,
       args,
     }),
     db.execute({
