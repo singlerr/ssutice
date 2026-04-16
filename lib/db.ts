@@ -63,8 +63,8 @@ export async function getNotices(
 
   const [rowsResult, countResult] = await Promise.all([
     category === 'all'
-      ? db.execute(`SELECT * FROM notices ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`)
-      : db.execute({ sql: `SELECT * FROM notices WHERE provider = ? ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`, args: [category] }),
+      ? db.execute(`SELECT * FROM notices ORDER BY CASE WHEN date IS NULL THEN 1 ELSE 0 END, date DESC LIMIT ${limit} OFFSET ${offset}`)
+      : db.execute({ sql: `SELECT * FROM notices WHERE provider = ? ORDER BY CASE WHEN date IS NULL THEN 1 ELSE 0 END, date DESC LIMIT ${limit} OFFSET ${offset}`, args: [category] }),
     category === 'all'
       ? db.execute(`SELECT COUNT(*) as count FROM notices`)
       : db.execute({ sql: `SELECT COUNT(*) as count FROM notices WHERE provider = ?`, args: [category] }),
