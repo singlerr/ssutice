@@ -53,6 +53,7 @@ export type PushSubscription = {
 };
 
 export async function getNotices(
+  category: string,
   page: number,
   limit: number,
   query?: string
@@ -60,17 +61,29 @@ export async function getNotices(
   const db = getDb();
   const offset = (page - 1) * limit;
 
-  const whereClause = query ? `WHERE title LIKE ?` : '';
-  const searchArg = query ? [`%${query}%`] : [];
+  // Build WHERE clause from category + query
+  const conditions: string[] = [];
+  const args: (string | null)[] = [];
+
+  if (category !== 'all') {
+    conditions.push('provider = ?');
+    args.push(category);
+  }
+  if (query) {
+    conditions.push('title LIKE ?');
+    args.push(`%${query}%`);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const [rowsResult, countResult] = await Promise.all([
     db.execute({
       sql: `SELECT * FROM notices ${whereClause} ORDER BY CASE WHEN date IS NULL THEN 1 ELSE 0 END, date DESC LIMIT ${limit} OFFSET ${offset}`,
-      args: searchArg,
+      args,
     }),
     db.execute({
       sql: `SELECT COUNT(*) as count FROM notices ${whereClause}`,
-      args: searchArg,
+      args,
     }),
   ]);
 

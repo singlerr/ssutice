@@ -10,6 +10,7 @@ const LIMIT = 50; // show up to 50 per fetch
 
 export default function NoticeList() {
   const searchParams = useSearchParams();
+  const category = searchParams.get('category') ?? 'all';
   const query = searchParams.get('q') ?? '';
 
   const [notices, setNotices] = useState<Notice[]>([]);
@@ -25,6 +26,7 @@ export default function NoticeList() {
 
       try {
         const params = new URLSearchParams({ page: String(p), limit: String(LIMIT) });
+        params.set('category', category);
         if (query) params.set('q', query);
         const res = await fetch(`/api/notices?${params.toString()}`);
         const data = await res.json();
@@ -41,7 +43,7 @@ export default function NoticeList() {
         setLoadingMore(false);
       }
     },
-    [query]
+    [category, query]
   );
 
   useEffect(() => {
