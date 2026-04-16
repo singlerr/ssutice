@@ -46,7 +46,7 @@ async function fetchPage(page: number): Promise<ScrapedNotice[]> {
 
     // Date: look for date in parent li — date is in .notice_col1 .h2
     const li = $(el).closest('li');
-    const dateText = li.find('.notice_col1 .h2').first().text().trim();
+    const dateText = li.find('.notice_col1 .h2').first().text().trim().replace(/\./g, '-');
 
     if (!notices.find((n) => n.articleNo === articleNo)) {
       notices.push({ articleNo, title, url: href, date: dateText || null });

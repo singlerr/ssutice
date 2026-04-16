@@ -32,6 +32,9 @@ export async function initDb() {
       created_at TEXT DEFAULT (datetime('now'))
     );
   `);
+
+  // Normalize dates: dots to hyphens (e.g. "2026.04.16" -> "2026-04-16")
+  await getDb().execute(`UPDATE notices SET date = REPLACE(date, '.', '-') WHERE date LIKE '%.%'`);
 }
 
 export type Notice = {
