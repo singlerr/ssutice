@@ -1,12 +1,59 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Suspense } from 'react';
 import MobileMenu from './MobileMenu';
 
 export default function TopNav() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialQuery = searchParams.get('q') ?? '';
+  const [searchText, setSearchText] = useState(initialQuery);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  // Sync search text when URL changes externally (e.g. browser back)
+  useEffect(() => {
+    setSearchText(searchParams.get('q') ?? '');
+  }, [searchParams]);
+
+  const submitSearch = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      const params = new URLSearchParams(searchParams.toString());
+      if (trimmed) {
+        params.set('q', trimmed);
+      } else {
+        params.delete('q');
+      }
+      params.delete('page');
+      router.push(`/?${params.toString()}`);
+    },
+    [router, searchParams]
+  );
+
+  const handleChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const value = e.target.value;
+      setSearchText(value);
+
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => submitSearch(value), 300);
+    },
+    [submitSearch]
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === 'Enter') {
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        submitSearch(searchText);
+      }
+    },
+    [submitSearch, searchText]
+  );
 
   return (
     <>
@@ -39,11 +86,18 @@ export default function TopNav() {
 
         {/* Right side */}
         <div className="ml-auto flex items-center gap-3">
-          <div className="hidden sm:flex items-center gap-2 bg-gray-100 rounded-full px-3 py-1.5 text-sm text-gray-400">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className="hidden sm:flex items-center gap-2 bg-gray-100 rounded-full px-3 py-1.5 text-sm focus-within:ring-2 focus-within:ring-blue-300 focus-within:bg-white transition-all">
+            <svg className="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
-            공지사항 검색...
+            <input
+              type="text"
+              value={searchText}
+              onChange={handleChange}
+              onKeyDown={handleKeyDown}
+              placeholder="공지사항 검색..."
+              className="bg-transparent outline-none text-gray-800 placeholder-gray-400 w-40 lg:w-56"
+            />
           </div>
           <button className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-600">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

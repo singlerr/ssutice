@@ -1,29 +1,10 @@
 'use client';
 
-import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useRef } from 'react';
 import PushButton from './PushButton';
 
-const CATEGORIES = [
-  { key: 'all', label: 'All', icon: '⊞' },
-  { key: 'university', label: '숭실대학교', icon: '🏫' },
-  { key: 'cse', label: '컴퓨터학부', icon: '💻' },
-  { key: 'student-council', label: '총학생회', icon: '👥' },
-];
-
 export default function MobileMenu({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const active = searchParams.get('category') ?? 'all';
   const drawerRef = useRef<HTMLDivElement>(null);
-
-  function setCategory(key: string) {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set('category', key);
-    params.delete('page');
-    router.push(`/?${params.toString()}`);
-    onClose();
-  }
 
   // Close on Escape key
   useEffect(() => {
@@ -74,24 +55,6 @@ export default function MobileMenu({ open, onClose }: { open: boolean; onClose: 
             </svg>
           </button>
         </div>
-
-        {/* Category filters */}
-        <nav className="flex flex-col gap-0.5 p-3">
-          {CATEGORIES.map((cat) => (
-            <button
-              key={cat.key}
-              onClick={() => setCategory(cat.key)}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors text-left ${
-                active === cat.key
-                  ? 'bg-blue-50 text-blue-700'
-                  : 'text-gray-600 hover:bg-gray-100'
-              }`}
-            >
-              <span className="text-base">{cat.icon}</span>
-              {cat.label}
-            </button>
-          ))}
-        </nav>
 
         <div className="flex-1" />
 

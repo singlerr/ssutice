@@ -53,21 +53,25 @@ export type PushSubscription = {
 };
 
 export async function getNotices(
-  category: string,
   page: number,
-  limit: number
+  limit: number,
+  query?: string
 ): Promise<{ notices: Notice[]; total: number }> {
   const db = getDb();
   const offset = (page - 1) * limit;
-  const where = category === 'all' ? '' : `WHERE provider = ?`;
+
+  const whereClause = query ? `WHERE title LIKE ?` : '';
+  const searchArg = query ? [`%${query}%`] : [];
 
   const [rowsResult, countResult] = await Promise.all([
-    category === 'all'
-      ? db.execute(`SELECT * FROM notices ORDER BY CASE WHEN date IS NULL THEN 1 ELSE 0 END, date DESC LIMIT ${limit} OFFSET ${offset}`)
-      : db.execute({ sql: `SELECT * FROM notices WHERE provider = ? ORDER BY CASE WHEN date IS NULL THEN 1 ELSE 0 END, date DESC LIMIT ${limit} OFFSET ${offset}`, args: [category] }),
-    category === 'all'
-      ? db.execute(`SELECT COUNT(*) as count FROM notices`)
-      : db.execute({ sql: `SELECT COUNT(*) as count FROM notices WHERE provider = ?`, args: [category] }),
+    db.execute({
+      sql: `SELECT * FROM notices ${whereClause} ORDER BY CASE WHEN date IS NULL THEN 1 ELSE 0 END, date DESC LIMIT ${limit} OFFSET ${offset}`,
+      args: searchArg,
+    }),
+    db.execute({
+      sql: `SELECT COUNT(*) as count FROM notices ${whereClause}`,
+      args: searchArg,
+    }),
   ]);
 
   const notices = rowsResult.rows.map((r) => ({

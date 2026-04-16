@@ -10,7 +10,7 @@ const LIMIT = 50; // show up to 50 per fetch
 
 export default function NoticeList() {
   const searchParams = useSearchParams();
-  const category = searchParams.get('category') ?? 'all';
+  const query = searchParams.get('q') ?? '';
 
   const [notices, setNotices] = useState<Notice[]>([]);
   const [total, setTotal] = useState(0);
@@ -24,7 +24,9 @@ export default function NoticeList() {
       else setLoadingMore(true);
 
       try {
-        const res = await fetch(`/api/notices?category=${category}&page=${p}&limit=${LIMIT}`);
+        const params = new URLSearchParams({ page: String(p), limit: String(LIMIT) });
+        if (query) params.set('q', query);
+        const res = await fetch(`/api/notices?${params.toString()}`);
         const data = await res.json();
         if (replace) {
           setNotices(data.notices ?? []);
@@ -39,13 +41,13 @@ export default function NoticeList() {
         setLoadingMore(false);
       }
     },
-    [category]
+    [query]
   );
 
   useEffect(() => {
     setPage(1);
     fetchNotices(1, true);
-  }, [category, fetchNotices]);
+  }, [query, fetchNotices]);
 
   function loadMore() {
     const next = page + 1;
@@ -68,7 +70,7 @@ export default function NoticeList() {
           <svg className="w-10 h-10 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
           </svg>
-          공지사항이 없습니다
+          {query ? `"${query}" 검색 결과가 없습니다` : '공지사항이 없습니다'}
         </div>
       ) : (
         <>

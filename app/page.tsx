@@ -6,7 +6,9 @@ import NoticeList from '@/components/NoticeList';
 export default function Home() {
   return (
     <div className="min-h-screen bg-gray-50">
-      <TopNav />
+      <Suspense>
+        <TopNav />
+      </Suspense>
       <div className="flex pt-14">
         {/* Sidebar */}
         <div className="hidden md:flex flex-col w-60 flex-shrink-0 fixed top-14 bottom-0 left-0 border-r border-gray-200 bg-white px-4 overflow-y-auto">
