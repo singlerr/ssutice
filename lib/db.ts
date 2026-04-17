@@ -35,6 +35,15 @@ export async function initDb() {
 
   // Normalize dates: dots to hyphens (e.g. "2026.04.16" -> "2026-04-16")
   await getDb().execute(`UPDATE notices SET date = REPLACE(date, '.', '-') WHERE date LIKE '%.%'`);
+
+  // Migration: add providers column for per-provider push subscriptions
+  try {
+    await getDb().execute(
+      `ALTER TABLE push_subscriptions ADD COLUMN providers TEXT NOT NULL DEFAULT '["all"]'`
+    );
+  } catch {
+    // Column already exists — safe to ignore
+  }
 }
 
 export type Notice = {
@@ -52,6 +61,7 @@ export type PushSubscription = {
   endpoint: string;
   p256dh: string;
   auth: string;
+  providers: string[];
   created_at: string;
 };
 
@@ -126,6 +136,16 @@ export async function insertNotice(
   return (result.rowsAffected ?? 0) > 0;
 }
 
+function parseProviders(raw: unknown): string[] {
+  if (typeof raw !== 'string') return ['all'];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : ['all'];
+  } catch {
+    return ['all'];
+  }
+}
+
 export async function getAllSubscriptions(): Promise<PushSubscription[]> {
   const result = await getDb().execute(`SELECT * FROM push_subscriptions`);
   return result.rows.map((r) => ({
@@ -133,20 +153,56 @@ export async function getAllSubscriptions(): Promise<PushSubscription[]> {
     endpoint: r.endpoint as string,
     p256dh: r.p256dh as string,
     auth: r.auth as string,
+    providers: parseProviders(r.providers),
     created_at: r.created_at as string,
   }));
+}
+
+export async function getSubscriptionsByProvider(provider: string): Promise<PushSubscription[]> {
+  const result = await getDb().execute({
+    sql: `SELECT * FROM push_subscriptions WHERE providers LIKE '%"all"%' OR providers LIKE ?`,
+    args: [`%"${provider}"%`],
+  });
+  return result.rows.map((r) => ({
+    id: r.id as number,
+    endpoint: r.endpoint as string,
+    p256dh: r.p256dh as string,
+    auth: r.auth as string,
+    providers: parseProviders(r.providers),
+    created_at: r.created_at as string,
+  }));
+}
+
+export async function getSubscriptionProviders(endpoint: string): Promise<string[]> {
+  const result = await getDb().execute({
+    sql: `SELECT providers FROM push_subscriptions WHERE endpoint = ?`,
+    args: [endpoint],
+  });
+  if (result.rows.length === 0) return [];
+  return parseProviders(result.rows[0].providers);
 }
 
 export async function upsertSubscription(
   endpoint: string,
   p256dh: string,
-  auth: string
+  auth: string,
+  providers: string[] = ['all']
 ): Promise<void> {
   await getDb().execute({
-    sql: `INSERT INTO push_subscriptions (endpoint, p256dh, auth)
-          VALUES (?, ?, ?)
-          ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth`,
-    args: [endpoint, p256dh, auth],
+    sql: `INSERT INTO push_subscriptions (endpoint, p256dh, auth, providers)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, providers = excluded.providers`,
+    args: [endpoint, p256dh, auth, JSON.stringify(providers)],
+  });
+}
+
+export async function updateSubscriptionProviders(
+  endpoint: string,
+  providers: string[]
+): Promise<void> {
+  await getDb().execute({
+    sql: `UPDATE push_subscriptions SET providers = ? WHERE endpoint = ?`,
+    args: [JSON.stringify(providers), endpoint],
   });
 }
 

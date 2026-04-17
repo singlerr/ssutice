@@ -3,7 +3,17 @@
     "allow": [
       "Bash(tldr tree *)",
       "Bash(grep -r \"CRON_SECRET\" .env*)",
-      "Bash(cat .env.local)"
+      "Bash(cat .env.local)",
+      "WebSearch",
+      "Bash(npx tsc *)",
+      "Bash(npx kill-port *)",
+      "Bash(npm run *)",
+      "Bash(curl -s http://localhost:3000)",
+      "Bash(curl *)",
+      "Bash(npm show *)",
+      "Bash(npm install *)",
+      "Bash(node -e \"const m = require\\('@aduptive/instagram-scraper'\\); console.log\\(JSON.stringify\\(Object.keys\\(m\\)\\)\\)\")",
+      "Bash(node -e ' *)"
     ]
   }
 }

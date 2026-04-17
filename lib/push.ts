@@ -1,5 +1,5 @@
 import webpush from 'web-push';
-import { getAllSubscriptions, deleteSubscription } from './db';
+import { getSubscriptionsByProvider, deleteSubscription } from './db';
 
 let _initialized = false;
 
@@ -13,9 +13,9 @@ function initPush() {
   _initialized = true;
 }
 
-export async function sendToAll(title: string, body: string, url: string) {
+export async function sendToProvider(provider: string, title: string, body: string, url: string) {
   initPush();
-  const subscriptions = await getAllSubscriptions();
+  const subscriptions = await getSubscriptionsByProvider(provider);
 
   await Promise.allSettled(
     subscriptions.map(async (sub) => {

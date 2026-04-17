@@ -1,15 +1,19 @@
 import { insertNotice } from '../db';
-import { sendToAll } from '../push';
+import { sendToProvider } from '../push';
 import { scrapeUniversity } from './university';
 import { scrapeCSE } from './cse';
 import { scrapeStudentCouncil } from './student-council';
 import { scrapeSW } from './sw';
+import { createInstagramScraper } from './instagram';
 
 const PROVIDERS = [
   { key: 'university', label: '숭실대학교', scrape: scrapeUniversity },
   { key: 'cse', label: '컴퓨터학부', scrape: scrapeCSE },
   { key: 'student-council', label: '총학생회', scrape: scrapeStudentCouncil },
   { key: 'sw', label: '소프트웨어학부', scrape: scrapeSW },
+  { key: 'ig-focussu', label: '총학생회 인스타', scrape: createInstagramScraper('focussu.66th') },
+  { key: 'ig-it', label: 'IT대학 학생회', scrape: createInstagramScraper('it_soongsil') },
+  { key: 'ig-cse-council', label: '컴퓨터학부 학생회', scrape: createInstagramScraper('ssu_cse') },
 ] as const;
 
 export async function runAllScrapers(): Promise<number> {
@@ -29,7 +33,8 @@ export async function runAllScrapers(): Promise<number> {
         if (isNew) {
           newCount++;
           // Fire-and-forget push — don't block scrape on push failures
-          sendToAll(
+          sendToProvider(
+            provider.key,
             `[${provider.label}] 새 공지사항`,
             notice.title,
             notice.url
