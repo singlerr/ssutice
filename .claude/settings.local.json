@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tldr tree *)",
+      "Bash(grep -r \"CRON_SECRET\" .env*)",
+      "Bash(cat .env.local)"
+    ]
+  }
+}

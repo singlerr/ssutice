@@ -3,11 +3,13 @@ import { sendToAll } from '../push';
 import { scrapeUniversity } from './university';
 import { scrapeCSE } from './cse';
 import { scrapeStudentCouncil } from './student-council';
+import { scrapeSW } from './sw';
 
 const PROVIDERS = [
   { key: 'university', label: '숭실대학교', scrape: scrapeUniversity },
   { key: 'cse', label: '컴퓨터학부', scrape: scrapeCSE },
   { key: 'student-council', label: '총학생회', scrape: scrapeStudentCouncil },
+  { key: 'sw', label: '소프트웨어학부', scrape: scrapeSW },
 ] as const;
 
 export async function runAllScrapers(): Promise<number> {

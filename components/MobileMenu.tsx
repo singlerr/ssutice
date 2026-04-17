@@ -9,6 +9,7 @@ const CATEGORIES = [
   { key: 'university', label: '숭실대학교' },
   { key: 'cse', label: '컴퓨터학부' },
   { key: 'student-council', label: '총학생회' },
+  { key: 'sw', label: '소프트웨어학부' },
 ] as const;
 
 export default function MobileMenu({ open, onClose }: { open: boolean; onClose: () => void }) {
