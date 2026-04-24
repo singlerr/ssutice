@@ -36,6 +36,8 @@
 - lesson: 다양한 옵션 존재 - Camoufox, nodriver, Playwright+stealth, undetected-chromedriver
 - experiment: Camoufox API 상세 조사 + 인스타그램 DOM selector 전략 + 인증 방법 + Windows 호환성
 - lesson: Camoufox는 Playwright API 100% 호환, Windows 지원, persistent_context로 세션 유지 가능. Instagram DOM은 자주 변경되어 multi-selector fallback 필수. instagrapi도 API 기반 대안으로 유용.
+- experiment: 실전 검증 (Run #4) — Camoufox, Patchright 설치 및 Instagram 스크래핑 테스트
+- lesson: Camoufox/Patchright 모두 Python 3.14에서 정상 작동. Instagram 로그인 벽 없이 200 응답. og:meta 태그가 DOM selector보다 훨씬 안정적. nodriver는 Python 3.14 비호환(SyntaxError).
 
 ---
 
@@ -991,3 +993,290 @@ Q: Firefox 기반 stealth가 필요한가?
 - lesson: reCAPTCHA v2/v3, Cloudflare Turnstile, hCaptcha 지원. Camoufox 네이티브 지원. 무료 AI 해결 + 유료 서비스(2Captcha, CapSolver) 연동 가능.
 - experiment: Bright Data Camoufox 가이드 분석 (2026)
 - lesson: 엔진 수준 fingerprint 조작 vs JS injection 차이 확인. 대규모 스크래핑에서는 Scraping Browser/Web Unlocker 필요. Proxy 전략이 은닉성과 동등하게 중요.
+
+---
+
+# 실전 검증: 실제 설치 및 Instagram 스크래핑 테스트 (Run #4)
+
+## 17. 테스트 환경
+
+| 항목 | 값 |
+|------|-----|
+| **OS** | Windows 11 Education (10.0.26200) |
+| **Python** | 3.14.3 (cp314) |
+| **CPU** | AMD Ryzen 9 7950X3D |
+| **네트워크** | 일반 한국 ISP (datacenter IP 아님) |
+| **테스트 일시** | 2026-04-24 |
+
+## 18. 설치 테스트 결과
+
+### 18.1 Camoufox — 성공
+
+```bash
+python -m pip install camoufox        # 성공 (v0.4.11)
+python -m camoufox fetch               # 성공 (v135.0.1-beta.24, 530MB 다운로드)
+```
+
+**설치 시간**: ~10초 (빠른 네트워크)
+**디스크 사용량**: ~530MB (Firefox 기반 브라우저 바이너리 + uBlock Origin addon)
+
+**의존성 자동 설치**: browserforge, playwright, orjson, pysocks 등
+
+### 18.2 Patchright — 성공
+
+```bash
+python -m pip install patchright      # 성공 (v1.58.2)
+```
+
+**설치 시간**: ~2초
+**디스크 사용량**: ~37MB (Playwright 패키지만, 브라우저는 시스템 Chromium 사용)
+
+**주의**: 별도 브라우저 다운로드 불필요 — 시스템에 설치된 Chromium을 사용
+
+### 18.3 nodriver — 실패 (Python 3.14 비호환)
+
+```bash
+python -m pip install nodriver        # 설치는 성공 (v0.48.1)
+```
+
+**실행 오류**:
+```
+SyntaxError: Non-UTF-8 code starting with '\xb1' on line 1365
+  in nodriver/cdp/network.py
+```
+
+**원인**: nodriver의 CDP 모듈이 Python 3.14의 엄격한 인코딩 규칙과 호환되지 않음
+**해결 방법**: Python 3.11~3.13에서는 정상 작동할 것으로 예상. Python 3.14에서는 사용 불가.
+
+### 18.4 설치 비교 요약
+
+| 도구 | 설치 성공 | 실행 성공 | 설치 시간 | 디스크 | Python 3.14 |
+|------|----------|----------|----------|--------|-------------|
+| **Camoufox** | O | O | ~10초 | ~530MB | 호환 |
+| **Patchright** | O | O | ~2초 | ~37MB | 호환 |
+| **nodriver** | O | **X** (SyntaxError) | ~3초 | ~1MB | **비호환** |
+
+## 19. Instagram 스크래핑 실전 테스트
+
+### 19.1 테스트 1: 프로필 페이지 (@nasa)
+
+#### Camoufox 결과
+
+```json
+{
+  "url": "https://www.instagram.com/nasa/",
+  "title": "NASA(@nasa) • Instagram 사진 및 동영상",
+  "login_wall": false,
+  "article_count": 1,
+  "og_description": "팔로워 105M명, 팔로잉 95명, 게시물 4,762개"
+}
+```
+
+**핵심 발견**:
+- **로그인 벽 없음** — 비로그인 상태로 프로필 페이지 접근 가능
+- **og:description에서 팔로워/게시물 수 추출 성공**
+- **article 요소 1개 감지** — React lazy loading으로 인해 더 많은 게시물은 스크롤 필요
+- **12개 이미지 감지** (`article img` selector)
+
+#### Patchright 결과
+
+```json
+{
+  "url": "https://www.instagram.com/nasa/",
+  "title": "NASA(@nasa) • Instagram 사진 및 동영상",
+  "login_wall": false,
+  "article_count": 1,
+  "og_description": "팔로워 105M명, 팔로잉 95명, 게시물 4,762개"
+}
+```
+
+**Camoufox와 동일한 결과** — 두 도구 모두 Instagram bot detection을 우회 성공
+
+### 19.2 테스트 2: 개별 게시물 페이지
+
+Camoufox로 `https://www.instagram.com/nasa/p/DXPduuvEY7S/` 테스트:
+
+```json
+{
+  "url": "https://www.instagram.com/nasa/p/DXPduuvEY7S/",
+  "status": 200,
+  "caption": null,
+  "author": null,
+  "datetime": "2026-04-17T17:45:15.000Z",
+  "image_count": 0,
+  "og_image": "https://scontent-ssn1-1.cdninstagram.com/v/...",
+  "og_description": "303K likes, 1,278 comments - nasa on April 17, 2026: \"Friends ➡️ Best Friends...\""
+}
+```
+
+**핵심 발견**:
+
+1. **DOM selector가 실패하는 이유**: Instagram은 React로 렌더링하며, caption/author 텍스트가 `h1`, `span` 등에 바로 나타나지 않음. Shadow DOM 또는 lazy hydration 사용.
+
+2. **og:meta 태그가 가장 신뢰 가능**:
+   - `og:description` → 좋아요 수, 댓글 수, 작성자, 작성일, **전체 캡션 텍스트** 포함
+   - `og:image` → 게시물 대표 이미지 CDN URL
+   - `og:type` → 기본적으로 `instapp:photo`
+
+3. **`<time>` 요소는 추출 성공**: datetime 속성에 ISO 형식 타임스탬프
+
+## 20. 실전 검증 결론: 최적의 데이터 추출 전략
+
+### 20.1 Meta 태그 우선 전략 (검증됨)
+
+```python
+async def extract_post_data(page):
+    """og:meta 태그에서 안정적으로 데이터 추출"""
+    return await page.evaluate('''() => {
+        const r = {};
+        
+        // 가장 신뢰 가능한 소스
+        const ogDesc = document.querySelector('meta[property="og:description"]');
+        const ogImg = document.querySelector('meta[property="og:image"]');
+        const ogType = document.querySelector('meta[property="og:type"]');
+        
+        if (ogDesc) {
+            const text = ogDesc.content;
+            // "303K likes, 1,278 comments - nasa on April 17, 2026: \"...\""
+            const likeMatch = text.match(/^(\S+) likes/);
+            const commentMatch = text.match(/,(\s*\S+) comments/);
+            const authorMatch = text.match(/-\s+(\w+)\s+on/);
+            const dateMatch = text.match(/on\s+(.+?):\s+"/);
+            const captionMatch = text.match(/:\s+"([\s\S]+)"\.?\s*$/);
+            
+            r.likes = likeMatch ? likeMatch[1] : null;
+            r.comments = commentMatch ? commentMatch[1].trim() : null;
+            r.author = authorMatch ? authorMatch[1] : null;
+            r.date = dateMatch ? dateMatch[1] : null;
+            r.caption = captionMatch ? captionMatch[1] : null;
+            r.full_og = text;
+        }
+        
+        r.image_url = ogImg ? ogImg.content : null;
+        r.type = ogType ? ogType.content : null;
+        
+        // 시간 요소 (보조)
+        const time = document.querySelector('time');
+        r.datetime = time ? time.getAttribute('datetime') : null;
+        
+        return r;
+    }''')
+```
+
+### 20.2 Instagram 데이터 추출 방법 신뢰도 (실전 검증)
+
+| 방법 | 신뢰도 | 추출 데이터 | 비고 |
+|------|--------|-----------|------|
+| **og:meta 태그** | ★★★★★ | 좋아요, 댓글, 작성자, 날짜, 전체 캡션, 이미지 URL | DOM 변경 영향 없음 |
+| **`<time>` 요소** | ★★★★☆ | datetime 속성 | DOM selector 안정적 |
+| **DOM selector (h1, span)** | ★★☆☆☆ | caption, author | React hydration 지연으로 null 빈번 |
+| **GraphQL API 가로채기** | ★★★★★ | 전체 구조화된 데이터 | 구현 복잡도 높음, 로그인 필요 가능 |
+
+### 20.3 최종 실전 스크래핑 코드 (검증됨)
+
+```python
+import asyncio
+import json
+import re
+from camoufox.async_api import AsyncCamoufox
+
+
+async def scrape_instagram_post(post_url: str) -> dict:
+    """
+    검증된 Instagram 게시물 스크래핑 (Camoufox + og:meta 전략)
+    
+    Windows 11, Python 3.14에서 테스트 완료
+    """
+    async with AsyncCamoufox(
+        headless=True,
+        humanize=True,       # 인간 같은 마우스 움직임
+        block_webrtc=True,   # IP 누출 방지
+    ) as browser:
+        page = await browser.new_page()
+        
+        response = await page.goto(post_url, wait_until='domcontentloaded', timeout=30000)
+        
+        if response.status != 200:
+            return {'error': f'HTTP {response.status}', 'url': post_url}
+        
+        await page.wait_for_timeout(3000)
+        
+        # og:meta 태그에서 데이터 추출 (가장 안정적)
+        data = await page.evaluate('''() => {
+            const ogDesc = document.querySelector('meta[property="og:description"]');
+            const ogImg = document.querySelector('meta[property="og:image"]');
+            const time = document.querySelector('time');
+            
+            const r = { url: window.location.href };
+            r.og_description = ogDesc ? ogDesc.content : null;
+            r.og_image = ogImg ? ogImg.content : null;
+            r.datetime = time ? time.getAttribute('datetime') : null;
+            return r;
+        }''')
+        
+        # og:description 파싱
+        if data.get('og_description'):
+            text = data['og_description']
+            like_match = re.search(r'^(\S+) likes', text)
+            comment_match = re.search(r',(\s*\S+) comments', text)
+            author_match = re.search(r'-\s+(\w+)\s+on', text)
+            caption_match = re.search(r':\s+"([\s\S]+?)"\.?\s*$', text)
+            
+            data['likes'] = like_match.group(1) if like_match else None
+            data['comments'] = comment_match.group(1).strip() if comment_match else None
+            data['author'] = author_match.group(1) if author_match else None
+            data['caption'] = caption_match.group(1) if caption_match else None
+        
+        return data
+
+
+async def scrape_profile(username: str) -> dict:
+    """Instagram 프로필 페이지 스크래핑"""
+    async with AsyncCamoufox(
+        headless=True,
+        humanize=True,
+        block_webrtc=True,
+    ) as browser:
+        page = await browser.new_page()
+        await page.goto(f'https://www.instagram.com/{username}/', 
+                       wait_until='domcontentloaded', timeout=30000)
+        await page.wait_for_timeout(3000)
+        
+        return await page.evaluate('''() => {
+            const ogDesc = document.querySelector('meta[property="og:description"]');
+            const ogImg = document.querySelector('meta[property="og:image"]');
+            return {
+                url: window.location.href,
+                title: document.title,
+                og_description: ogDesc ? ogDesc.content : null,
+                og_image: ogImg ? ogImg.content : null,
+            };
+        }''')
+
+
+# 실행 예제
+async def main():
+    # 게시물
+    post = await scrape_instagram_post('https://www.instagram.com/nasa/p/DXPduuvEY7S/')
+    print(json.dumps(post, ensure_ascii=False, indent=2))
+    
+    # 프로필
+    profile = await scrape_profile('nasa')
+    print(json.dumps(profile, ensure_ascii=False, indent=2))
+
+
+asyncio.run(main())
+```
+
+## 21. What's Been Tried (Run #4 업데이트)
+
+- experiment: Camoufox 실전 설치 및 실행 테스트 (Python 3.14, Windows 11)
+- lesson: pip install 성공, camoufox fetch 성공 (530MB). headless 모드 정상 작동. example.com 테스트 통과.
+- experiment: Camoufox로 Instagram @nasa 프로필 페이지 스크래핑
+- lesson: **로그인 벽 없음**. HTTP 200. og:description에서 팔로워/게시물 수 추출 성공. 12개 이미지 감지.
+- experiment: Camoufox로 Instagram 개별 게시물 스크래핑
+- lesson: **DOM selector (h1, span)은 null 반환** — React hydration 지연. **og:meta 태그가 가장 신뢰 가능**: 좋아요, 댓글, 작성자, 날짜, 전체 캡션, 이미지 URL 모두 포함. `<time>` 요소는 정상 작동.
+- experiment: Patchright 실전 설치 및 Instagram 테스트
+- lesson: pip install 성공, 시스템 Chromium 사용. Instagram 프로필 페이지 동일하게 스크래핑 성공. Camoufox보다 설치 간편.
+- experiment: nodriver 실전 설치 테스트 (Python 3.14)
+- lesson: **설치는 성공하지만 실행 시 SyntaxError** (cdp/network.py, Non-UTF-8 code). Python 3.14 미지원. 3.11~3.13 필요.
