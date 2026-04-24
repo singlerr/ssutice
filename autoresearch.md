@@ -30,7 +30,7 @@
 ## Current best
 - metric: N/A
 - why it won: N/A
-- status: **연구 완료** — 실전 검증 + 다중 게시물 스크래핑 포함 5회 실험 완료
+- status: **연구 완료** — 실전 검증 + 다중 게시물 + API 분석 포함 6회 실험 완료
 
 ## What's Been Tried
 - experiment: Web search on headless browser alternatives for anti-detection
@@ -41,6 +41,8 @@
 - lesson: Camoufox/Patchright 모두 Python 3.14에서 정상 작동. Instagram 로그인 벽 없이 200 응답. og:meta 태그가 DOM selector보다 훨씬 안정적. nodriver는 Python 3.14 비호환(SyntaxError).
 - experiment: 다중 게시물 스크래핑, 스크롤, Rate Limit 테스트 (Run #5)
 - lesson: 프로필 페이지 비결정적(soft login wall). 게시물 URL 직접 접근이 안정적. 8개 rapid request에서 rate limit 없음(0.8s/게시물). 삭제 게시물은 title로 감지 가능. 프로덕션급 InstagramScraper 클래스 작성.
+- experiment: GraphQL/API 가로채기, meta 태그 전체 분석, 프로필 소스 일관성 (Run #6)
+- lesson: GraphQL 가로채기는 2026년 불가(빈 응답). og:meta에서 미디어ID/소유자ID/이미지URL/좋아요/댓글/캡션 모두 추출 가능. 프로필 HTML 소스도 비결정적. og:meta가 유일한 안정적 방법.
 
 ---
 
@@ -1612,3 +1614,166 @@ asyncio.run(main())
 - lesson: 8개 연속 요청에서 429 rate limit 없음. 유효 게시물 4/4 성공. 평균 0.8초/게시물. 대량 스크래핑(50+게시물)에서는 proxy 필요할 것으로 예상.
 - experiment: 삭제/오류 게시물 처리 로직 검증
 - lesson: 삭제된 게시물은 HTTP 200 + title "Post isn't available" + og:description==null. rate limit은 HTTP 429. soft login wall은 og:description에 팔로워 정보만 있고 articles==0.
+
+---
+
+# 심화 분석: GraphQL/API 가로채기, Meta 태그 전체 분석, 프로필 소스 일관성 (Run #6)
+
+## 27. GraphQL/API 네트워크 가로채기 결과
+
+### 27.1 네트워크 응답 분석 (게시물 페이지)
+
+게시물 페이지(`instagram.com/nasa/p/DXPduuvEY7S/`)에서 캡처한 전체 네트워크 응답:
+
+| URL | 상태 | 크기 | 내용 |
+|-----|------|------|------|
+| `/nasa/p/DXPduuvEY7S/` (HTML) | 200 | 1,085KB | **SSR 페이지 — 모든 데이터 포함** |
+| `/api/graphql` (x4) | 200 | 149~231B | 실험 플래그만 (`ig_optimize_dialogs_launch` 등) |
+| `/graphql/query` | 200 | 147B | 빈 데이터 (`{"data":{}}`) |
+| `/ajax/bulk-route-definitions/` | 200 | 3.9KB | 라우팅 설정 |
+| `/facebook.com/ig_xsite_user_info/` | 200 | 65B | Facebook 연동 |
+
+**핵심 결론**: Instagram은 **별도 GraphQL API 호출 없이** 모든 게시물 데이터를 초기 HTML에 SSR로 포함. `graphql/query` 엔드포인트는 빈 응답 반환. 네트워크 가로채기로 추가 데이터를 얻을 수 없음.
+
+### 27.2 HTML 소스 내 데이터 패턴 검색
+
+```
+검색 패턴                    결과
+─────────────────────────────────────────────────
+shortcode_media              없음 (구 Instagram 구조)
+edge_media_to_caption        없음
+display_url                  없음
+video_url                    없음
+accessibility_caption        발견! "Photo by NASA on April 17, 2026..."
+graphql                      있음 (API 경로 문자열만)
+window._sharedData           없음 (구 구조)
+window.__initialData         없음
+```
+
+**결론**: Instagram 2026년 버전은 서버 렌더링에서 구 GraphQL 데이터 구조를 제거. 데이터는 React hydration 후 DOM에만 나타남. HTML 소스에서 직접 추출 가능한 것은 meta 태그뿐.
+
+## 28. Meta 태그 전체 분석 (게시물 페이지)
+
+Instagram 게시물 페이지에서 발견된 **모든 meta 태그**:
+
+### 28.1 구조화된 데이터
+
+| Meta 태그 | 값 | 활용 |
+|-----------|-----|------|
+| `og:type` | `article` | 미디어 타입 |
+| `og:site_name` | `Instagram` | 사이트 확인 |
+| `og:url` | `https://www.instagram.com/nasa/p/DXPduuvEY7S/` | 정식 URL |
+| `og:title` | `NASA on Instagram: "Friends \u27a1\ufe0f Best Friends..."` | 작성자 + 캡션 앞부분 |
+| `og:description` | `304K likes, 1,279 comments - nasa on April 17, 2026: "..."` | **핵심: 좋아요/댓글/작성자/캡션** |
+| `og:image` | `https://scontent-ssn1-1.cdninstagram.com/v/...` | 대표 이미지 CDN URL |
+| `description` | og:description과 동일 | 검색엔진용 |
+
+### 28.2 앱 딥링크 및 ID
+
+| Meta 태그 | 값 | 활용 |
+|-----------|-----|------|
+| `al:ios:url` | `instagram://media?id=3877448558815842002` | **미디어 ID** |
+| `al:android:url` | 게시물 URL | Android 딥링크 |
+| `al:ios:app_store_id` | `389801252` | Instagram iOS 앱 ID |
+| `al:android:package` | `com.instagram.android` | Android 패키지명 |
+| `fb:app_id` | `124024574287414` | Facebook 앱 ID |
+| `instapp:owner_user_id` | `528817151` | **계정 소유자 ID** |
+
+### 28.3 Twitter 카드
+
+| Meta 태그 | 값 |
+|-----------|-----|
+| `twitter:card` | `summary_large_image` |
+| `twitter:site` | `@instagram` |
+| `twitter:image` | og:image와 동일 |
+| `twitter:title` | `NASA (@nasa) \u2022 Instagram photos and videos` |
+
+### 28.4 SEO/크롤링 제어
+
+| Meta 태그 | 값 | 의미 |
+|-----------|-----|------|
+| `robots` | `noarchive, noimageindex` | 보관/이미지 인덱싱 금지 |
+| `bingbot` | `noarchive` | Bing 보관 금지 |
+
+### 28.5 추출 가능한 전체 데이터 맵핑
+
+```python
+# meta 태그에서 추출 가능한 데이터 (og:description 파싱 포함)
+post_data = {
+    'media_id': '3877448558815842002',       # al:ios:url에서 추출
+    'owner_id': '528817151',                   # instapp:owner_user_id
+    'url': 'https://.../',                      # og:url
+    'author': 'nasa',                           # og:description 파싱
+    'likes': '304K',                            # og:description 파싱
+    'comments': '1,279',                        # og:description 파싱
+    'caption': 'Friends \u27a1\ufe0f Best Friends...', # og:description 파싱
+    'image_url': 'https://scontent-...',        # og:image
+    'date': 'April 17, 2026',                   # og:description 파싱
+    'accessibility': 'Photo by NASA on April 17, 2026...', # HTML에서 추출
+}
+```
+
+## 29. 프로필 페이지 HTML 소스 일관성 분석
+
+### 29.1 프로필 소스에서 게시물 링크 추출
+
+프로필 HTML 소스(`instagram.com/nasa/`)에서 정규식으로 추출:
+
+```python
+# HTML 소스에서 게시물 링크 추출 패턴
+post_pattern = r'href="(/[\w.]+/p/[\w-]+/)"'
+reel_pattern = r'href="(/[\w.]+/reel/[\w-]+/)"'
+```
+
+**성공 시 결과 (프로필 HTML에 포함된 링크)**:
+```
+게시물 링크 4개: /nasa/p/DXPduuvEY7S/, /nasaartemis/p/DW_sj70mtDW/, /nasa/p/DXcEDIrkr6y/, /nasa/p/DXXOeZjj63U/
+릴스 링크 8개: /nasa/reel/DW-toGVj4I4/, /nasaartemis/reel/DXcaK97Dgfm/, ...
+```
+
+### 29.2 비결정성 확인 (2회 연속 테스트)
+
+```
+Run 1: HTML 883KB, 게시물 0개, 릴스 0개  ← 소프트 로그인 벽
+Run 2: HTML 1,001KB, 게시물 4개, 릴스 8개 ← 정상 콘텐츠
+```
+
+**확인**: 프로필 페이지의 HTML 소스 수준에서도 **비결정적**. Instagram이 A/B 테스트 또는 IP/세션 기반으로 서로 다른 SSR 결과를 반환.
+
+### 29.3 프로필 정보는 항상 사용 가능
+
+비결정적 콘텐츠와 관계없이 **og:description은 항상 반환**:
+```
+og:description: "105M Followers, 95 Following, 4,762 Posts - See Instagram photos and videos from NASA (@nasa)"
+```
+
+**프로필에서 항상 추출 가능한 데이터**:
+- 팔로워 수 (105M)
+- 팔로잉 수 (95)
+- 총 게시물 수 (4,762)
+- 프로필 이름 (NASA)
+- 사용자명 (@nasa)
+- 프로필 이미지 (og:image)
+
+## 30. 데이터 추출 방법 최종 비교 (실험 검증 완료)
+
+| 방법 | 안정성 | 데이터 풍부도 | 구현 난이도 | 비고 |
+|------|--------|-------------|------------|------|
+| **og:meta 태그** | ★★★★★ | ★★★★☆ | 낮음 | 좋아요/댓글/작성자/캡션/이미지/미디어ID/소유자ID |
+| **DOM selector** | ★★☆☆☆ | ★★★☆☆ | 중간 | React hydration 지연, null 빈번 |
+| **GraphQL 가로채기** | ☆☆☆☆☆ | ☆☆☆☆☆ | 높음 | **2026년 불가** — API가 빈 응답 반환 |
+| **HTML 소스 정규식** | ★★☆☆☆ | ★★★☆☆ | 낮음 | 게시물 링크 추출은 가능하지만 프로필이 비결정적 |
+| **accessibility_caption** | ★★★☆☆ | ★★☆☆☆ | 낮음 | "Photo by NASA on April 17, 2026" 정도 |
+
+**최종 결론: og:meta 태그가 유일하게 안정적이고 구현이 간단한 방법.** GraphQL 가로채기는 2026년에 작동하지 않음.
+
+## 31. What's Been Tried (Run #6 업데이트)
+
+- experiment: GraphQL API 네트워크 가로채기 테스트
+- lesson: Instagram 2026은 별도 GraphQL API 호출 없이 SSR로 모든 데이터를 HTML에 포함. `/api/graphql`은 실험 플래그만 반환. `/graphql/query`는 빈 응답. **네트워크 가로채기로 추가 데이터 불가.**
+- experiment: Meta 태그 전체 분석 (게시물 페이지)
+- lesson: **og:meta 태그에서 미디어 ID, 소유자 ID, 이미지 URL, 좋아요/댓글/캡션 등 거의 모든 데이터 추출 가능.** `al:ios:url`에서 `media_id`, `instapp:owner_user_id`에서 계정 ID 확보.
+- experiment: 프로필 HTML 소스 정규식으로 게시물 링크 추출
+- lesson: HTML 소스에 게시물/릴스 링크가 포함되는 경우가 있지만 **비결정적** (50% 확률). og:description은 항상 반환. 프로필 정보(팔로워/게시물 수)는 항상 사용 가능.
+- experiment: 데이터 추출 방법 최종 비교
+- lesson: **og:meta 태그 > HTML 소스 정규식 > DOM selector > GraphQL 가로채기(불가)**. GraphQL은 2026년에 작동하지 않으므로 문서에서 권장 순위 조정 필요.
