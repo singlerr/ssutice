@@ -30,7 +30,7 @@
 ## Current best
 - metric: N/A
 - why it won: N/A
-- status: **연구 완료** — 실전 검증 + 다중 게시물 + API 분석 포함 6회 실험 완료
+- status: **연구 완료** — 7회 실험 완료 (비교, 심화, 확장, 실전검증, 다중게시물, API분석, Embed분석)
 
 ## What's Been Tried
 - experiment: Web search on headless browser alternatives for anti-detection
@@ -43,6 +43,8 @@
 - lesson: 프로필 페이지 비결정적(soft login wall). 게시물 URL 직접 접근이 안정적. 8개 rapid request에서 rate limit 없음(0.8s/게시물). 삭제 게시물은 title로 감지 가능. 프로덕션급 InstagramScraper 클래스 작성.
 - experiment: GraphQL/API 가로채기, meta 태그 전체 분석, 프로필 소스 일관성 (Run #6)
 - lesson: GraphQL 가로채기는 2026년 불가(빈 응답). og:meta에서 미디어ID/소유자ID/이미지URL/좋아요/댓글/캡션 모두 추출 가능. 프로필 HTML 소스도 비결정적. og:meta가 유일한 안정적 방법.
+- experiment: Embed 엔드포인트 분석, 정규+embed 조합 전략 (Run #7)
+- lesson: /embed/에서 정확한 좋아요 수(303,732 vs 304K)와 경량 데이터(135KB vs 1.1MB) 제공. __a=1은 더 이상 JSON API 아님. embed도 비결정적이므로 정규+embed 폴백 조합이 최적.
 
 ---
 
@@ -1777,3 +1779,131 @@ og:description: "105M Followers, 95 Following, 4,762 Posts - See Instagram photo
 - lesson: HTML 소스에 게시물/릴스 링크가 포함되는 경우가 있지만 **비결정적** (50% 확률). og:description은 항상 반환. 프로필 정보(팔로워/게시물 수)는 항상 사용 가능.
 - experiment: 데이터 추출 방법 최종 비교
 - lesson: **og:meta 태그 > HTML 소스 정규식 > DOM selector > GraphQL 가로채기(불가)**. GraphQL은 2026년에 작동하지 않으므로 문서에서 권장 순위 조정 필요.
+
+---
+
+# 대체 엔드포인트 분석: Embed API (Run #7)
+
+## 32. Instagram Embed 엔드포인트 분석
+
+### 32.1 테스트한 엔드포인트
+
+| 엔드포인트 | HTTP 상태 | 본문 크기 | 데이터 | 로그인 벽 |
+|------------|----------|----------|--------|----------|
+| `/p/{id}/` (정규) | 200 | ~1.1MB | og:meta + React 렌더링 | 간헐적 |
+| `/p/{id}/embed/` | 200 | ~135KB | 작성자, 정확한 좋아요 수, 이미지 | 없음 |
+| `/p/{id}/embed/captioned/` | 200 | ~138KB | embed + 캡션 텍스트 | 없음 |
+| `/p/{id}/?__a=1` | 200 | ~1.1MB | 정규 페이지와 동일 (API 아님) | 간헐적 |
+| `/p/{id}/?__d=1` | 200 | ~1.1MB | 정규 페이지와 동일 | 간헐적 |
+| `/p/{id}/media/` | 타임아웃 | - | 미디어 리다이렉트 (안 됨) | - |
+
+### 32.2 Embed 페이지 장점
+
+1. **정확한 좋아요 수**: og:description은 "304K"로 축약하지만, embed는 **"303,732 likes"**로 정확한 숫자 반환
+2. **경량**: 135KB vs 1.1MB — 8배 작음. 더 빠른 로딩, 적은 대역폭
+3. **안정적**: 정규 페이지보다 로그인 벽이 적게 표시 (하지만 비결정성 완전히 제거는 아님)
+4. **간단한 DOM**: React hydration 없이 서버 렌더링만으로 데이터 표시
+5. **구조화된 텍스트**: 줄바꿈으로 구분된 명확한 데이터 레이아웃
+
+### 32.3 Embed 페이지에서 추출 가능한 데이터
+
+```
+embed body text (예: /p/DXPduuvEY7S/embed/captioned/):
+
+  nasa                                    ← 작성자명
+  Verified                                ← 인증 배지
+  105M followers                          ← 팔로워 수
+  View profile
+  nasa
+  Verified
+  4,762 posts · 105M followers            ← 게시물/팔로워 요약
+  View more on Instagram
+  Like
+  Comment
+  Share
+  Save
+  303,732 likes                           ← 정확한 좋아요 수
+  [캡션 텍스트]                           ← /captioned/ 변형에서만
+  Add a comment...
+```
+
+### 32.4 Embed vs 정규 페이지 비교
+
+| 항목 | 정규 `/p/{id}/` | Embed `/embed/` |
+|------|----------------|-----------------|
+| 좋아요 수 | "304K" (축약) | **"303,732" (정확)** |
+| 캡션 | og:description (잘림) | body text (전체) |
+| 이미지 | CDN URL (og:image) | DOM 이미지 태그 |
+| 크기 | ~1.1MB | ~135KB |
+| 로그인 벽 | 간헐적 | 간헐적 (정규보다 적음) |
+| 미디어 ID | `al:ios:url`에서 추출 | 미제공 |
+| 소유자 ID | `instapp:owner_user_id` | 미제공 |
+
+### 32.5 권장 전략: 정규 + Embed 조합
+
+```python
+async def scrape_post_complete(page, post_url):
+    """
+    정규 페이지에서 메타데이터(ID, og:meta) +
+    Embed 페이지에서 정확한 좋아요 수/캡션 추출
+    """
+    result = {}
+    
+    # 1. 정규 페이지: meta 태그 (ID, 이미지 URL)
+    resp = await page.goto(post_url, wait_until='domcontentloaded', timeout=15000)
+    await page.wait_for_timeout(2000)
+    
+    meta = await page.evaluate("""() => {
+        const og = document.querySelector('meta[property="og:description"]');
+        const img = document.querySelector('meta[property="og:image"]');
+        const iosUrl = document.querySelector('meta[property="al:ios:url"]');
+        const ownerId = document.querySelector('meta[property="instapp:owner_user_id"]');
+        return {
+            og_description: og ? og.content : null,
+            og_image: img ? img.content : null,
+            media_id: iosUrl ? iosUrl.content.match(/id=(\d+)/)?.[1] : null,
+            owner_id: ownerId ? ownerId.content : null,
+        };
+    }""")
+    result.update(meta)
+    
+    # 2. Embed 페이지: 정확한 좋아요 수
+    # /embed/ (경량, ID 포함)
+    shortcode = post_url.rstrip('/').split('/')[-1]
+    embed_url = f'https://www.instagram.com/p/{shortcode}/embed/captioned/'
+    await page.goto(embed_url, wait_until='domcontentloaded', timeout=15000)
+    await page.wait_for_timeout(2000)
+    
+    embed = await page.evaluate("""() => {
+        const text = document.body ? document.body.innerText : '';
+        const likeMatch = text.match(/([0-9,]+)\s*likes/);
+        const authorMatch = text.match(/^\s*(\w+)/m);
+        // 캡션: 좋아요 수 뒤의 텍스트
+        const lines = text.split('\n');
+        const likeIdx = lines.findIndex(l => l.includes('likes'));
+        const authorIdx = lines.findIndex(l => l.match(/^\w+$/));
+        let caption = '';
+        if (likeIdx >= 0 && likeIdx + 1 < lines.length) {
+            caption = lines.slice(likeIdx + 1).join(' ').substring(0, 500);
+        }
+        return {
+            exact_likes: likeMatch ? likeMatch[1] : null,
+            caption: caption,
+        };
+    }""")
+    
+    result['exact_likes'] = embed['exact_likes']
+    if embed['caption']:
+        result['full_caption'] = embed['caption']
+    
+    return result
+```
+
+## 33. What's Been Tried (Run #7 업데이트)
+
+- experiment: Instagram 대체 엔드포인트 테스트 (embed, __a=1, __d=1, media/)
+- lesson: `/embed/`와 `/embed/captioned/`가 정규 페이지보다 **정확한 좋아요 수**와 **경량(8배 작음)** 제공. `__a=1`은 2026년에 더 이상 JSON API로 작동하지 않음(정규 페이지와 동일). `/media/`는 타임아웃.
+- experiment: 정규 페이지 vs embed 페이지 데이터 비교
+- lesson: og:description은 좋아요 수를 "304K"로 축약하지만 embed는 "303,732"로 정확 반환. 캡션도 embed에서 더 완전하게 추출. 하지만 **embed도 비결정적** — 때때로 "Page is not available" 반환.
+- experiment: 정규 + embed 조합 스크래핑 전략 수립
+- lesson: 정규 페이지에서 미디어 ID/소유자 ID/이미지 URL을, embed에서 정확한 좋아요 수/캡션을 가져오는 조합이 최적. 두 소스를 모두 시도하고 성공한 것을 사용하는 폴백 전략 권장.
