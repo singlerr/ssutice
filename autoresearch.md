@@ -30,7 +30,7 @@
 ## Current best
 - metric: N/A
 - why it won: N/A
-- status: **연구 완료** — 7회 실험 완료 (비교, 심화, 확장, 실전검증, 다중게시물, API분석, Embed분석)
+- status: **연구 완료** — 8회 실험 완료 (비교, 심화, 확장, 실전검증, 다중게시물, API분석, Embed분석, Node.js/Next.js통합)
 
 ## What's Been Tried
 - experiment: Web search on headless browser alternatives for anti-detection
@@ -45,6 +45,8 @@
 - lesson: GraphQL 가로채기는 2026년 불가(빈 응답). og:meta에서 미디어ID/소유자ID/이미지URL/좋아요/댓글/캡션 모두 추출 가능. 프로필 HTML 소스도 비결정적. og:meta가 유일한 안정적 방법.
 - experiment: Embed 엔드포인트 분석, 정규+embed 조합 전략 (Run #7)
 - lesson: /embed/에서 정확한 좋아요 수(303,732 vs 304K)와 경량 데이터(135KB vs 1.1MB) 제공. __a=1은 더 이상 JSON API 아님. embed도 비결정적이므로 정규+embed 폴백 조합이 최적.
+- experiment: Patchright Node.js + Next.js 통합 (Run #8)
+- lesson: `npm install patchright`로 Node.js에서도 동일하게 작동. Vercel serverless에서는 브라우저 실행 불가. 별도 서버/워커 필요. TypeScript 코드 + API Route 패턴 작성.
 
 ---
 
@@ -1907,3 +1909,179 @@ async def scrape_post_complete(page, post_url):
 - lesson: og:description은 좋아요 수를 "304K"로 축약하지만 embed는 "303,732"로 정확 반환. 캡션도 embed에서 더 완전하게 추출. 하지만 **embed도 비결정적** — 때때로 "Page is not available" 반환.
 - experiment: 정규 + embed 조합 스크래핑 전략 수립
 - lesson: 정규 페이지에서 미디어 ID/소유자 ID/이미지 URL을, embed에서 정확한 좋아요 수/캡션을 가져오는 조합이 최적. 두 소스를 모두 시도하고 성공한 것을 사용하는 폴백 전략 권장.
+
+---
+
+# Node.js/TypeScript 생태계 + Next.js 통합 (Run #8)
+
+## 34. Patchright Node.js 테스트 결과
+
+### 34.1 설치
+
+```bash
+npm install patchright    # v1.59.4 (Playwright v1.59 포함)
+```
+
+**주의**: `patchright`을 설치하면 `playwright` 모듈이 대체됨. 같은 프로젝트에서 두 패키지 공존 불가.
+
+### 34.2 Instagram 게시물 스크래핑 (Node.js)
+
+**테스트 결과**: Python과 동일하게 작동
+
+```
+Status: 200
+og:description: 304K likes, 1,279 comments - nasa - April 17, 2026
+media_id: 3877448558815842002
+owner_id: 528817151
+datetime: 2026-04-17T17:45:15.000Z
+```
+
+### 34.3 Embed 엔드포인트 (Node.js)
+
+**테스트 결과**: Python과 동일
+
+```
+Embed status: 200
+Exact likes: 303,745
+Body: nasa / 105M followers / 303,745 likes / caption...
+```
+
+**결론**: Node.js에서도 동일한 전략(og:meta + embed 폴백)이 그대로 적용 가능.
+
+## 35. Next.js 통합 패턴
+
+### 35.1 프로젝트 현재 상태
+
+```json
+// package.json 이미 포함:
+// next: 16.2.4
+// @aduptive/instagram-scraper: ^1.0.3 (기존 스크래퍼)
+// cheerio: ^1.2.0 (HTML 파서)
+```
+
+프로젝트에 이미 Instagram 스크래핑 관련 의존성이 있음. Patchright로 교체/보완 가능.
+
+### 35.2 권장 아키텍처 (Next.js App Router)
+
+```typescript
+// lib/instagram-scraper.ts
+import { chromium, type Browser } from 'patchright';
+
+let browserInstance: Browser | null = null;
+
+async function getBrowser(): Promise<Browser> {
+  if (!browserInstance) {
+    browserInstance = await chromium.launch({ headless: true });
+  }
+  return browserInstance;
+}
+
+export async function scrapeInstagramPost(url: string) {
+  const browser = await getBrowser();
+  const page = await browser.newPage();
+  try {
+    // 1. 정규 페이지: meta 태그 (ID, 이미지, 캡션)
+    const resp = await page.goto(url, {
+      waitUntil: 'domcontentloaded', timeout: 30000,
+    });
+    if (resp!.status() !== 200) return { error: `HTTP ${resp!.status()}` };
+    await page.waitForTimeout(2000);
+
+    const meta = await page.evaluate(() => {
+      const get = (p: string) =>
+        document.querySelector(`meta[property="${p}"]`)
+          ?.getAttribute('content') ?? null;
+      return {
+        og_description: get('og:description'),
+        og_image: get('og:image'),
+        media_id: get('al:ios:url')?.match(/id=(\d+)/)?.[1] ?? null,
+        owner_id: get('instapp:owner_user_id'),
+        datetime: document.querySelector('time')?.getAttribute('datetime') ?? null,
+      };
+    });
+
+    // 2. Embed: 정확한 좋아요 수
+    const shortcode = url.replace(/\/$/, '').split('/').pop();
+    let exactLikes: string | null = null;
+    try {
+      await page.goto(
+        `https://www.instagram.com/p/${shortcode}/embed/captioned/`,
+        { waitUntil: 'domcontentloaded', timeout: 10000 }
+      );
+      await page.waitForTimeout(2000);
+      const embedData = await page.evaluate(() => {
+        const text = document.body?.innerText ?? '';
+        const likeMatch = text.match(/([0-9,]+)\s*likes/);
+        return { likes: likeMatch?.[1] ?? null };
+      });
+      exactLikes = embedData.likes;
+    } catch { /* embed 실패해도 meta 데이터는 있음 */ }
+
+    return { ...meta, exact_likes: exactLikes, status: 'ok' };
+  } finally {
+    await page.close();
+  }
+}
+```
+
+### 35.3 API Route 패턴
+
+```typescript
+// app/api/scrape/route.ts
+import { NextRequest, NextResponse } from 'next/server';
+import { scrapeInstagramPost } from '@/lib/instagram-scraper';
+
+export async function GET(request: NextRequest) {
+  const url = request.nextUrl.searchParams.get('url');
+  if (!url || !url.includes('instagram.com/p/')) {
+    return NextResponse.json(
+      { error: 'Invalid Instagram post URL' }, { status: 400 }
+    );
+  }
+  try {
+    const data = await scrapeInstagramPost(url);
+    return NextResponse.json(data);
+  } catch (error) {
+    return NextResponse.json(
+      { error: 'Scraping failed', details: String(error) }, { status: 500 }
+    );
+  }
+}
+```
+
+### 35.4 Vercel 배포 시 주의사항
+
+| 이슈 | 해결 방안 |
+|------|----------|
+| Serverless 함수 크기 제한 | Patchright ~37MB, Vercel 50MB 한도 내 가능 |
+| 실행 시간 제한 | Hobby: 10초, Pro: 60초. 스크래핑 1회 ~5초 |
+| **헤드리스 브라우저 미지원** | **Vercel에서 Playwright 실행 불가. 외부 API 또는 자체 서버 필요** |
+| 대안 1 | 별도 워커에서 스크래핑 -> DB 저장 -> API 제공 |
+| 대안 2 | Camoufox Python 서버 별도 실행 -> Node.js에서 HTTP API 호출 |
+| 대안 3 | Docker 컨테이너 배포 (Railway, Fly.io, Render) |
+
+**핵심**: Vercel serverless에서는 브라우저 실행이 제한됨. 별도 서버 또는 Python 워커 권장.
+
+## 36. Python vs Node.js 최종 비교
+
+| 항목 | Python (Camoufox) | Node.js (Patchright) |
+|------|-------------------|---------------------|
+| 은닉 수준 | 최고 (Firefox + 엔진 수준) | 높음 (Chromium + 소스코드 패치) |
+| 설치 복잡도 | 530MB 바이너리 다운로드 필요 | npm install만 (37MB) |
+| Instagram 차단 | 없음 (테스트 통과) | 없음 (테스트 통과) |
+| og:meta 추출 | 동일 | 동일 |
+| embed 추출 | 동일 | 동일 |
+| Next.js 통합 | HTTP API로 호출 | 직접 import 가능 |
+| Vercel 배포 | 불가 (별도 서버) | 불가 (별도 서버) |
+| 권장 용도 | 독립 스크래핑 서버 | Next.js 서버 사이드 |
+
+## 37. What's Been Tried (Run #8 업데이트)
+
+- experiment: Patchright Node.js 패키지 설치 및 Instagram 스크래핑 테스트
+- lesson: `npm install patchright`로 설치 성공 (v1.59.4). Python과 동일한 데이터 추출 결과. **patchright 설치 시 playwright 모듈이 대체됨** -- 공존 불가.
+- experiment: Node.js에서 embed 엔드포인트 테스트
+- lesson: 정확한 좋아요 수(303,745)와 캡션 정상 추출. Python과 완전 동일한 결과.
+- experiment: Next.js 통합 패턴 설계
+- lesson: 프로젝트에 이미 `@aduptive/instagram-scraper`와 `cheerio`가 있음. Patchright로 교체 가능. API Route 패턴으로 통합 가능하지만 **Vercel serverless에서는 브라우저 실행 불가** -- 별도 서버/워커 필요.
+- experiment: Python vs Node.js 비교 분석
+- lesson: 은닉성은 Camoufox(Python)가 우위. Next.js 직접 통합은 Node.js(Patchright)가 유리. **Vercel 배포 시에는 둘 다 별도 서버 필요.**
