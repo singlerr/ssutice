@@ -30,6 +30,7 @@
 ## Current best
 - metric: N/A
 - why it won: N/A
+- status: **연구 완료** — 실전 검증 포함 4회 실험 완료
 
 ## What's Been Tried
 - experiment: Web search on headless browser alternatives for anti-detection
