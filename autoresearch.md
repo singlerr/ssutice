@@ -702,3 +702,292 @@ print(f'내용: {info.caption_text}')
 │  - 세션별 최대 50페이지 제한                   │
 └─────────────────────────────────────────────┘
 ```
+
+---
+
+# 심화 조사: Patchright, playwright-captcha, Bright Data 가이드 (Run #3)
+
+## 12. Patchright — Undetected Playwright Fork
+
+Patchright는 Playwright의 포크로, **Playwright 코드를 그대로 사용하면서 stealth 기능이 내장**된 브라우저를 제공합니다.
+
+### 12.1 개요
+
+| 항목 | 내용 |
+|------|------|
+| **저장소** | github.com/Kaliiiiiiiiii-Vinyzu/patchright (원작), github.com/intopost/patchright (포크) |
+| **언어** | Python & Node.js |
+| **기반** | Playwright (Chromium) |
+| **stealth 방식** | Playwright 소스코드에 직접 패치 → `navigator.webdriver` 제거, CDP 감지 회피 |
+| **인스타그램 적합성** | 중간~높음 (Chromium 기반이므로 Firefox 기반 도구보다 탐지 위험 약간 높음) |
+| **유지보수** | 활성 (2026) |
+| **설치** | `pip install patchright` (Python), `npm install patchright` (JS) |
+
+### 12.2 핵심 차이점 (vs Playwright + playwright-stealth)
+
+```
+Playwright + playwright-stealth:
+  - JS injection으로 detection 우회 (런타임 패치)
+  - 고급 anti-bot에는 무력 (TLS fingerprint, behavioral analysis)
+
+Patchright:
+  - Playwright 소스코드 자체를 수정하여 빌드
+  - webdriver flag 원천 제거 (injection 아님)
+  - CDP 자동화 감지 회피
+  - 하지만 여전히 Chromium 기반 → Chrome-specific detection에 취약
+```
+
+### 12.3 Python 예제
+
+```python
+import asyncio
+from patchright.async_api import async_playwright
+
+async def scrape_instagram_patchright(post_url: str):
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            locale='ko-KR',
+        )
+        page = await context.new_page()
+        
+        # Playwright API와 완전 동일 — stealth는 이미 내장됨
+        await page.goto(post_url, wait_until='networkidle')
+        await page.wait_for_timeout(3000)
+        
+        caption = await page.evaluate("""
+            document.querySelector('h1')?.textContent?.trim() || ''
+        """)
+        print(f'Caption: {caption}')
+        
+        await browser.close()
+
+asyncio.run(scrape_instagram_patchright('https://www.instagram.com/p/EXAMPLE/'))
+```
+
+### 12.4 Patchright vs Camoufox 선택 가이드
+
+| 기준 | Camoufox | Patchright |
+|------|----------|------------|
+| **은닉 수준** | 최고 (엔진 수준) | 높음 (소스코드 패치) |
+| **브라우저 기반** | Firefox | Chromium |
+| **API 호환성** | Playwright | Playwright (완전 동일) |
+| **설치 복잡도** | 바이너리 다운로드 필요 | pip install만 |
+| **Chrome 탐지** | 영향 없음 (Firefox) | 여전히 취약 (CDC 변수 등) |
+| **권장 순위** | 1위 | 2위 (Playwright-stealth 대체) |
+
+## 13. playwright-captcha — CAPTCHA 자동 해결 라이브러리
+
+### 13.1 개요
+
+`camoufox-captcha`가 2025년 7월 아카이브되고 **`playwright-captcha`** (github.com/techinz/playwright-captcha)로 이관되었습니다.
+
+| 항목 | 내용 |
+|------|------|
+| **저장소** | github.com/techinz/playwright-captcha |
+| **마지막 커밋** | 2026년 4월 (활성 유지보수) |
+| **지원 CAPTCHA** | reCAPTCHA v2, reCAPTCHA v3, Cloudflare Turnstile, hCaptcha, GeeTest, Amazon CAPTCHA |
+| **지원 브라우저** | Playwright (기본), Camoufox (네이티브 지원), Patchright |
+| **CAPTCHA 해결 방식** | AI 기반 (무료) + 유료 서비스 연동 (2Captcha, CapSolver 등) |
+| **라이선스** | MIT |
+
+### 13.2 설치
+
+```bash
+pip install playwright-captcha
+```
+
+### 13.3 reCAPTCHA v2 해결 예제 (Camoufox + playwright-captcha)
+
+```python
+import asyncio
+from camoufox.async_api import AsyncCamoufox
+from playwright_captcha import solve_captcha
+
+async def scrape_with_captcha_bypass(url: str):
+    async with AsyncCamoufox(headless=True, humanize=True) as browser:
+        page = await browser.new_page()
+        await page.goto(url, wait_until='networkidle')
+        
+        # reCAPTCHA v2 감지 시 자동 해결
+        try:
+            result = await solve_captcha(
+                page=page,
+                captcha_type='recaptcha_v2',
+                # 무료 AI 해결 (기본) 또는 유료 서비스 연동:
+                # solver='2captcha',
+                # api_key='YOUR_API_KEY',
+            )
+            print(f'CAPTCHA 해결 결과: {result}')
+        except Exception as e:
+            print(f'CAPTCHA 없거나 해결 실패: {e}')
+        
+        # 이후 정상 scraping 진행
+        caption = await page.evaluate("""
+            document.querySelector('h1')?.textContent?.trim() || ''
+        """)
+        print(f'Caption: {caption}')
+
+asyncio.run(scrape_with_captcha_bypass('https://www.instagram.com/p/EXAMPLE/'))
+```
+
+### 13.4 유료 CAPTCHA 서비스 연동
+
+```python
+# 2Captcha 연동
+result = await solve_captcha(
+    page=page,
+    captcha_type='recaptcha_v2',
+    solver='2captcha',
+    api_key='YOUR_2CAPTCHA_KEY',
+)
+
+# CapSolver 연동 (AI 기반, 더 저렴)
+result = await solve_captcha(
+    page=page,
+    captcha_type='recaptcha_v3',
+    solver='capsolver',
+    api_key='YOUR_CAPSOLVER_KEY',
+)
+```
+
+### 13.5 인스타그램에서의 실제 적용
+
+Instagram은 주로 **자체 bot detection**을 사용하지만, 로그인 페이지나 의심스러운 활동 감지 시 reCAPTCHA를 표시할 수 있습니다:
+
+```python
+async def instagram_scrape_with_fallback(url: str, cookies: list = None):
+    async with AsyncCamoufox(
+        headless=True,
+        humanize=True,
+        block_webrtc=True,
+        geoip=True,
+        proxy={'server': 'http://residential-proxy:port'},
+    ) as browser:
+        page = await browser.new_page()
+        
+        # 쿠키로 세션 복원
+        if cookies:
+            await page.context.add_cookies(cookies)
+        
+        await page.goto(url, wait_until='networkidle')
+        await page.wait_for_timeout(2000)
+        
+        # CAPTCHA 감지 및 해결
+        captcha_present = await page.evaluate("""
+            !!document.querySelector('.g-recaptcha') || 
+            !!document.querySelector('iframe[src*="recaptcha"]') ||
+            !!document.querySelector('[data-testid="captcha"]')
+        """)
+        
+        if captcha_present:
+            print('CAPTCHA 감지됨 — 해결 시도...')
+            await solve_captcha(page=page, captcha_type='recaptcha_v2')
+            await page.wait_for_timeout(3000)
+        
+        # 정상 scraping
+        data = await page.evaluate("""() => {
+            return {
+                caption: document.querySelector('h1')?.textContent?.trim() || '',
+                author: document.querySelector('article header a span')?.textContent?.trim() || '',
+                datetime: document.querySelector('time')?.getAttribute('datetime') || '',
+            };
+        }""")
+        return data
+```
+
+## 14. Bright Data Camoufox 가이드 핵심 요약 (2026)
+
+Bright Data의 공식 Camoufox 스크래핑 가이드에서 확인된 프로덕션급 인사이트:
+
+### 14.1 엔진 수준 Fingerprint 제어
+
+```
+일반 stealth 도구:
+  → JS injection으로 navigator.webdriver 등 속성 오버라이드
+  → 고급 anti-bot은 JS 실행 전/후 차이를 감지하여 탐지
+
+Camoufox:
+  → Firefox C++ 소스코드를 직접 수정하여 fingerprint 값 설정
+  → JS 레벨에서 조작한 흔적이 전혀 없음
+  → BrowserForge로 실제 트래픽 통계 분포에 맞는 device 정보 생성
+  → "Crowdblending" — 실제 사용자의 fingerprint 분포에 녹아듦
+```
+
+### 14.2 프로덕션 스케일 고려사항
+
+| 규모 | 권장 접근 | 이유 |
+|------|-----------|------|
+| **소규모** (<100페이지/일) | Camoufox 직접 사용 | 충분한 은닉성 |
+| **중간 규모** (100~1000페이지/일) | Camoufox + Residential Proxy | IP 회전 필수 |
+| **대규모** (>1000페이지/일) | Bright Data Scraping Browser 또는 Web Unlocker | 캡차/차단 해결 자동화, IP 풀 관리 |
+
+### 14.3 Proxy 전략
+
+```python
+# Bright Data Residential Proxy (권장)
+proxy_config = {
+    'server': 'http://brd.superproxy.io:22225',
+    'username': 'brd-customer-XXX-zone-XXX',
+    'password': 'PASSWORD',
+}
+
+async with AsyncCamoufox(
+    headless=True,
+    geoip=True,  # proxy IP로 geolocation 자동 설정
+    proxy=proxy_config,
+) as browser:
+    page = await browser.new_page()
+    await page.goto('https://www.instagram.com/')
+```
+
+### 14.4 한계점 (Bright Data 가이드 기준)
+
+- **Rate Limiting**: Instagram은 IP별/계정별 요청 제한 → proxy 회전으로만 대응
+- **Behavioral Analysis**: 요청 패턴, 스크롤 속도, 클릭 간격 분석 → `humanize=True`로 완화
+- **계정 차단**: 스크래핑 전용 계정 사용 필수, 개인 계정 절대 사용 금지
+- **DOM 변경**: Instagram DOM은 주기적으로 변경 → multi-selector fallback 필수
+
+## 15. 업데이트된 최종 추천 (Run #3 반영)
+
+### 15.1 도구 순위 (2026년 4월 기준)
+
+| 순위 | 도구 | 은닉성 | CAPTCHA 대응 | 설치 난이도 | 추천 이유 |
+|------|------|--------|-------------|-------------|-----------|
+| **1** | Camoufox | ★★★★★ | ★★★★★ (playwright-captcha 연동) | 중간 | Firefox 기반, 엔진 수준 은닉 |
+| **2** | Patchright | ★★★★☆ | ★★★★☆ | 낮음 | Playwright 코드 그대로, 소스코드 패치 |
+| **3** | nodriver | ★★★☆☆ | ★★★☆☆ | 낮음 | Chrome 직접 제어, 간편 |
+| **4** | Playwright+stealth | ★★☆☆☆ | ★★☆☆☆ | 낮음 | 기존 코드 활용, 은닉성 약함 |
+
+### 15.2 권장 스택
+
+```
+Browser:    Camoufox (Firefox 기반, 엔진 수준 fingerprint)
+CAPTCHA:    playwright-captcha (reCAPTCHA v2/v3, Cloudflare 지원)
+Proxy:      Residential Proxy + geoip=True
+인증:       persistent_context + user_data_dir (또는 쿠키 주입)
+데이터:     Multi-selector fallback + GraphQL API 가로채기
+행동:       humanize=True + 랜덤 2~5초 딜레이
+```
+
+### 15.3 선택 트리
+
+```
+Q: Firefox 기반 stealth가 필요한가?
+  YES → Camoufox
+  NO  → Q: Playwright 코드를 그대로 쓰고 싶은가?
+    YES → Patchright
+    NO  → Q: 가장 간단한 설치를 원하는가?
+      YES → nodriver
+      NO  → Playwright + playwright-stealth
+```
+
+## 16. What's Been Tried (업데이트)
+
+- experiment: Patchright 조사 — Playwright 포크, 소스코드 패치로 stealth 내장
+- lesson: Chromium 기반이므로 Firefox 기반(Camoufox)보다 탐지 위험 높음. Playwright-stealth보다는 나음. pip install로 간편 설치.
+- experiment: playwright-captcha 조사 — camoufox-captcha의 후속, 활성 유지보수
+- lesson: reCAPTCHA v2/v3, Cloudflare Turnstile, hCaptcha 지원. Camoufox 네이티브 지원. 무료 AI 해결 + 유료 서비스(2Captcha, CapSolver) 연동 가능.
+- experiment: Bright Data Camoufox 가이드 분석 (2026)
+- lesson: 엔진 수준 fingerprint 조작 vs JS injection 차이 확인. 대규모 스크래핑에서는 Scraping Browser/Web Unlocker 필요. Proxy 전략이 은닉성과 동등하게 중요.
