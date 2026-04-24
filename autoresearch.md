@@ -30,7 +30,7 @@
 ## Current best
 - metric: N/A
 - why it won: N/A
-- status: **연구 완료** — 8회 실험 완료 (비교, 심화, 확장, 실전검증, 다중게시물, API분석, Embed분석, Node.js/Next.js통합)
+- status: **연구 완료** — 9회 실험 완료. 기존 스크래퍼 분석 포함. 최종 2단계 아키텍처 권장.
 
 ## What's Been Tried
 - experiment: Web search on headless browser alternatives for anti-detection
@@ -2085,3 +2085,164 @@ export async function GET(request: NextRequest) {
 - lesson: 프로젝트에 이미 `@aduptive/instagram-scraper`와 `cheerio`가 있음. Patchright로 교체 가능. API Route 패턴으로 통합 가능하지만 **Vercel serverless에서는 브라우저 실행 불가** -- 별도 서버/워커 필요.
 - experiment: Python vs Node.js 비교 분석
 - lesson: 은닉성은 Camoufox(Python)가 우위. Next.js 직접 통합은 Node.js(Patchright)가 유리. **Vercel 배포 시에는 둘 다 별도 서버 필요.**
+
+---
+
+# 기존 스크래퍼 분석 + 최종 아키텍처 권장 (Run #9)
+
+## 38. 기존 @aduptive/instagram-scraper 분석
+
+### 38.1 개요
+
+프로젝트에 이미 설치된 `@aduptive/instagram-scraper` (v1.0.3) 패키지 분석:
+
+| 항목 | 내용 |
+|------|------|
+| **방식** | Headless HTTP (axios) — 브라우저 없이 직접 API 호출 |
+| **대상** | Instagram 모바일 API (`/api/v1/`) |
+| **인증** | 불필요 (공개 프로필) |
+| **언어** | TypeScript (Node.js) |
+| **의존성** | axios만 |
+
+### 38.2 테스트 결과 (2026-04-24)
+
+**성공하는 기능**:
+```
+GET /api/v1/feed/user/{user_id}/  → 프로필 게시물 목록
+  ✓ id: 3877448558815842002
+  ✓ shortcode: DXPduuvEY7S
+  ✓ timestamp: 1776447912
+  ✓ display_url: https://scontent-ssn1-1.cdninstagram.com/...
+  ✓ caption: 전체 텍스트
+  ✓ likes: 좋아요 수
+  ✓ comments: 댓글 수
+  ✓ is_video: boolean
+  ✓ url: 게시물 URL
+  ✓ media_type: 미디어 타입
+```
+
+**실패하는 기능**:
+```
+GET /api/v1/media/{shortcode}/info/  → 404 또는 500
+  → 미디어 상세 정보 (고해상도 이미지, 비디오 URL 등) 불가
+  → Instagram이 이 API 엔드포인트를 차단/변경
+```
+
+### 38.3 기존 스크래퍼 vs Patchright 비교
+
+| 항목 | @aduptive/instagram-scraper | Patchright (og:meta + embed) |
+|------|----------------------------|----------------------------|
+| **브라우저 필요** | 없음 (HTTP 직접) | 있음 (headless) |
+| **설치 크기** | ~1MB (axios만) | ~37MB (Chromium 포함) |
+| **속도** | 빠름 (~1초) | 느림 (~5초) |
+| **게시물 목록** | ✓ 프로필에서 N개 가져오기 | △ HTML 소스에서 추출 (비결정적) |
+| **캡션** | ✓ 전체 | ✓ 전체 (embed) |
+| **좋아요 수** | ✓ 숫자 (abbreviated 가능) | ✓ 정확한 숫자 (embed) |
+| **미디어 ID** | △ API 응답에 포함 | ✓ meta 태그에서 추출 |
+| **소유자 ID** | △ user_id만 | ✓ instapp:owner_user_id |
+| **고해상도 이미지** | ✗ API 차단 | ✓ og:image (CDN URL) |
+| **Vercel 배포** | ✓ 가능 | ✗ 불가능 |
+| **Rate limit** | 낮음 (HTTP만) | 높음 (브라우저) |
+
+## 39. 최종 권장 아키텍처 (프로젝트 맞춤)
+
+### 39.1 2단계 전략
+
+**1단계 (빠르고 경량)**: `@aduptive/instagram-scraper`로 프로필 게시물 목록 확보
+```
+→ 프로필에서 최근 N개 게시물의 shortcode, caption, likes, comments 획득
+→ Vercel serverless에서 실행 가능
+→ 빠름 (~1초/pro필)
+```
+
+**2단계 (필요시)**: Patchright로 추가 데이터 보완
+```
+→ 게시물별 og:meta (미디어 ID, 소유자 ID, 고해상도 이미지)
+→ Embed 엔드포인트 (정확한 좋아요 수, 전체 캡션)
+→ 별도 서버/워커에서만 실행 가능
+```
+
+### 39.2 권장 구현 패턴
+
+```typescript
+// 1단계: 기존 스크래퍼로 게시물 목록 (Vercel에서 실행 가능)
+import { InstagramScraper } from '@aduptive/instagram-scraper';
+
+export async function getProfilePosts(username: string, count = 20) {
+  const scraper = new InstagramScraper({
+    maxRetries: 2,
+    minDelay: 2000,
+    maxDelay: 5000,
+    timeout: 10000,
+  });
+  
+  const results = await scraper.getPosts(username, count);
+  if (!results.success || !results.posts) {
+    throw new Error(results.error || 'Failed to fetch posts');
+  }
+  
+  return results.posts.map(post => ({
+    id: post.id,
+    shortcode: post.shortcode,
+    caption: post.caption,
+    likes: post.likes,
+    comments: post.comments,
+    timestamp: post.timestamp,
+    display_url: post.display_url,
+    url: post.url,
+    is_video: post.is_video,
+  }));
+}
+
+// 2단계: Patchright로 상세 데이터 (별도 서버)
+import { chromium } from 'patchright';
+
+export async function enrichPostData(postUrl: string) {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    await page.waitForTimeout(2000);
+    
+    const meta = await page.evaluate(() => {
+      const get = (p: string) =>
+        document.querySelector(`meta[property="${p}"]`)
+          ?.getAttribute('content') ?? null;
+      return {
+        og_image: get('og:image'),
+        media_id: get('al:ios:url')?.match(/id=(\d+)/)?.[1] ?? null,
+        owner_id: get('instapp:owner_user_id'),
+        datetime: document.querySelector('time')?.getAttribute('datetime') ?? null,
+      };
+    });
+    return meta;
+  } finally {
+    await browser.close();
+  }
+}
+```
+
+### 39.3 배포 아키텍처
+
+```
+Vercel (Next.js):
+  └── API Route: GET /api/posts?username=nasa
+      └── @aduptive/instagram-scraper
+          └── Instagram 모바일 API 호출 (HTTP)
+          └── 게시물 목록 반환 (빠름, 경량)
+
+별도 워커 (Railway/Fly.io/Docker):
+  └── PATCH /api/posts/:shortcode/enrich
+      └── Patchright headless browser
+          └── og:meta + embed 데이터 보완
+          └── 고해상도 이미지, 미디어 ID, 정확한 좋아요 수
+```
+
+## 40. What's Been Tried (Run #9 업데이트)
+
+- experiment: @aduptive/instagram-scraper 기존 패키지 분석 및 테스트
+- lesson: 프로필 게시물 목록은 정상 작동 (id, shortcode, caption, likes, comments, display_url). 하지만 `/api/v1/media/{id}/info/` API는 404/500으로 차단됨. 브라우저 없이 HTTP만으로 기본 데이터 확보 가능.
+- experiment: 기존 스크래퍼 vs Patchright 비교 분석
+- lesson: 기존 스크래퍼는 빠르고 경량(Vercel 배포 가능)하지만 상세 데이터 부족. Patchright는 상세 데이터 제공하지만 Vercel 불가. **2단계 전략이 최적**: 기존 스크래퍼로 목록 → Patchright로 보완.
+- experiment: 최종 프로젝트 맞춤 아키텍처 설계
+- lesson: Vercel에서 `@aduptive/instagram-scraper`로 게시물 목록, 별도 워커에서 Patchright로 상세 데이터. 이 조합이 프로젝트의 기존 의존성을 활용하면서 Patchright의 장점도 취할 수 있음.
