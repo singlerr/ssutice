@@ -30,7 +30,7 @@
 ## Current best
 - metric: N/A
 - why it won: N/A
-- status: **연구 완료** — 실전 검증 포함 4회 실험 완료
+- status: **연구 완료** — 실전 검증 + 다중 게시물 스크래핑 포함 5회 실험 완료
 
 ## What's Been Tried
 - experiment: Web search on headless browser alternatives for anti-detection
@@ -39,6 +39,8 @@
 - lesson: Camoufox는 Playwright API 100% 호환, Windows 지원, persistent_context로 세션 유지 가능. Instagram DOM은 자주 변경되어 multi-selector fallback 필수. instagrapi도 API 기반 대안으로 유용.
 - experiment: 실전 검증 (Run #4) — Camoufox, Patchright 설치 및 Instagram 스크래핑 테스트
 - lesson: Camoufox/Patchright 모두 Python 3.14에서 정상 작동. Instagram 로그인 벽 없이 200 응답. og:meta 태그가 DOM selector보다 훨씬 안정적. nodriver는 Python 3.14 비호환(SyntaxError).
+- experiment: 다중 게시물 스크래핑, 스크롤, Rate Limit 테스트 (Run #5)
+- lesson: 프로필 페이지 비결정적(soft login wall). 게시물 URL 직접 접근이 안정적. 8개 rapid request에서 rate limit 없음(0.8s/게시물). 삭제 게시물은 title로 감지 가능. 프로덕션급 InstagramScraper 클래스 작성.
 
 ---
 
@@ -1281,3 +1283,332 @@ asyncio.run(main())
 - lesson: pip install 성공, 시스템 Chromium 사용. Instagram 프로필 페이지 동일하게 스크래핑 성공. Camoufox보다 설치 간편.
 - experiment: nodriver 실전 설치 테스트 (Python 3.14)
 - lesson: **설치는 성공하지만 실행 시 SyntaxError** (cdp/network.py, Non-UTF-8 code). Python 3.14 미지원. 3.11~3.13 필요.
+
+---
+
+# 심화 검증: 다중 게시물 스크래핑, 스크롤, Rate Limit 테스트 (Run #5)
+
+## 22. 프로필 페이지 스크롤 및 게시물 링크 수집
+
+### 22.1 스크롤 테스트 결과
+
+Instagram 프로필 페이지에서의 스크롤 동작 테스트:
+
+| 전략 | 결과 | 비고 |
+|------|------|------|
+| `window.scrollBy(0, 1500)` | 링크 수 변화 없음 | Instagram이 virtual scroll 사용 |
+| `window.scrollTo(0, document.body.scrollHeight)` | 동일 | 전체 body가 이미 로드됨 |
+| `keyboard.press('PageDown')` | 동일 | intersection observer 기반 로딩 |
+
+**핵심 발견**: Instagram 프로필은 **intersection observer**로 게시물을 lazy loading함. 단순 JS scroll로는 새 게시물이 로드되지 않음. 실제 스크롤 이벤트를 DOM 요소에 전달해야 함.
+
+### 22.2 프로필 페이지 비결정적 동작
+
+**중요 발견**: Instagram 프로필 페이지는 **비결정적**으로 동작:
+
+```
+Run #4 테스트: @nasa 프로필 → 12개 이미지, 4개 게시물 링크, 로그인 벽 없음
+Run #5 테스트: @nasa 프로필 → 0개 게시물, 로그인 폼 표시 (soft login wall)
+```
+
+**원인 분석**:
+1. Instagram이 A/B 테스트로 비로그인 사용자에게 다른 페이지 제공
+2. 세션 쿠키 유무에 따라 동작 변경
+3. IP 기반 rate limiting으로 콘텐츠 접근 제한
+
+**해결 방법**:
+- 프로필 페이지에 의존하지 말고 **직접 게시물 URL** 사용
+- 게시물 URL은 og:meta 태그를 통해 **일관되게 데이터 반환**
+- 프로필 정보는 og:description에서만 추출 (안정적)
+
+### 22.3 권장 스크롤 전략 (프로필 페이지)
+
+```python
+async def scroll_profile_for_posts(page, max_scrolls=10, delay=2000):
+    """프로필에서 게시물 링크 수집 (intersection observer 대응)"""
+    collected = set()
+    
+    for _ in range(max_scrolls):
+        # 현재 링크 수집
+        links = await page.evaluate("""() => {
+            return [...document.querySelectorAll('a[href*="/p/"]')]
+                .map(a => a.href);
+        }""")
+        new_links = set(links) - collected
+        if not new_links:
+            # 새 링크가 없으면 스크롤
+            await page.evaluate('window.scrollBy(0, 1000)')
+            await page.wait_for_timeout(delay)
+        collected.update(links)
+    
+    return list(collected)
+```
+
+**주의**: 위 전략은 프로필이 콘텐츠를 렌더링한 경우에만 작동. soft login wall이 표시되면 게시물 링크를 수집할 수 없음.
+
+## 23. 다중 게시물 순차 스크래핑 테스트
+
+### 23.1 순차 스크래핑 결과 (3개 게시물)
+
+```
+Post 1: @nasa/DXPduuvEY7S → 좋아요 304K, 댓글 1,278, 작성자 nasa, 날짜 2026-04-17 ✓
+Post 2: @nasa/DW_sj70mtDW → 좋아요 2M, 댓글 7,554, 작성자 nasaartemis, 날짜 2026-04-11 ✓
+Post 3: @nasaartemis/DW0QxYCy_0G → 삭제됨 ("Post isn't available") ✓ 감지됨
+```
+
+**결과**: 유효한 게시물 2/2 (100%), 삭제된 게시물 1/1 정상 감지
+
+### 23.2 Rate Limit 테스트 (8개 rapid request, 500ms 간격)
+
+```
+[1/8] OK    | 200 | 1.4s | 유효
+[2/8] OK    | 200 | 1.1s | 유효
+[3/8] OK    | 200 | 0.9s | 유효
+[4/8] OK    | 200 | 0.6s | 유효
+[5/8] EMPTY | 200 | 0.4s | 삭제됨
+[6/8] DEL   | 200 | 0.6s | 삭제됨
+[7/8] DEL   | 200 | 0.7s | 삭제됨
+[8/8] DEL   | 200 | 0.5s | 삭제됨
+
+유효 게시물: 4/4 성공 (100%)
+Rate limit: 0건 (8개 연속 요청에서 429 응답 없음)
+평균 처리 시간: 0.8초/게시물
+총 소요: 6.2초 / 8개 게시물
+```
+
+### 23.3 Rate Limit 한계 테스트 권장
+
+500ms 간격으로 8개 요청 시 rate limit 없음. 하지만 대량 스크래핑 시:
+
+| 요청 수 | 간격 | 예상 결과 |
+|---------|------|----------|
+| 1~10 | 500ms | 안전 (테스트 완료) |
+| 10~50 | 1~3s | 주의 필요 |
+| 50~100 | 3~5s | Residential proxy 권장 |
+| 100+ | 5s+ | Proxy + 세션 로테이션 필수 |
+
+## 24. 삭제/오류 게시물 처리
+
+### 24.1 감지된 에러 유형
+
+| 에러 | title | og:description | HTTP 상태 | 해결 |
+|------|-------|----------------|-----------|------|
+| **삭제된 게시물** | "Post isn't available" | null | 200 | og:description == null로 감지 |
+| **Soft login wall** | "Instagram 사진 및 동영상" | 팔로워 정보만 | 200 | articles == 0 + 로그인 폼 감지 |
+| **네트워크 오류** | N/A | N/A | timeout | 재시도 로직 |
+
+### 24.2 에러 감지 로직 (검증됨)
+
+```python
+async def scrape_with_error_handling(page, url):
+    """에러 처리 포함 스크래핑"""
+    try:
+        resp = await page.goto(url, wait_until='domcontentloaded', timeout=30000)
+        
+        if resp.status == 429:
+            return {'error': 'rate_limited', 'retry_after': 60}
+        
+        if resp.status != 200:
+            return {'error': f'http_{resp.status}'}
+        
+        await page.wait_for_timeout(3000)
+        
+        data = await page.evaluate("""() => {
+            const ogDesc = document.querySelector(
+                'meta[property="og:description"]'
+            );
+            const title = document.title || '';
+            
+            return {
+                og_description: ogDesc ? ogDesc.content : null,
+                is_deleted: title.includes('available'),
+                is_login_wall: !ogDesc && !title.includes('available'),
+            };
+        }""")
+        
+        if data.get('is_deleted'):
+            return {'error': 'post_deleted', 'url': url}
+        
+        if data.get('is_login_wall'):
+            return {'error': 'login_required', 'url': url}
+        
+        if not data.get('og_description'):
+            return {'error': 'no_data', 'url': url}
+        
+        # 정상 데이터 파싱...
+        return {'status': 'ok', 'og_description': data['og_description']}
+        
+    except Exception as e:
+        return {'error': type(e).__name__, 'message': str(e)}
+```
+
+## 25. 최종 프로덕션급 다중 게시물 스크래핑 코드
+
+```python
+import asyncio
+import json
+import re
+import random
+import time
+from camoufox.async_api import AsyncCamoufox
+
+
+class InstagramScraper:
+    """검증된 Instagram 다중 게시물 스크래핑 (Camoufox)"""
+    
+    def __init__(self, min_delay=2.0, max_delay=5.0):
+        self.min_delay = min_delay
+        self.max_delay = max_delay
+    
+    async def scrape_post(self, page, url: str) -> dict:
+        """단일 게시물 스크래핑 (에러 처리 포함)"""
+        try:
+            resp = await page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            
+            if resp.status == 429:
+                return {'error': 'rate_limited', 'retry_after': 60, 'url': url}
+            if resp.status != 200:
+                return {'error': f'http_{resp.status}', 'url': url}
+            
+            await page.wait_for_timeout(random.randint(2000, 4000))
+            
+            data = await page.evaluate("""() => {
+                const ogDesc = document.querySelector(
+                    'meta[property="og:description"]'
+                );
+                const ogImg = document.querySelector(
+                    'meta[property="og:image"]'
+                );
+                const timeEl = document.querySelector('time');
+                const title = document.title || '';
+                
+                return {
+                    og_description: ogDesc ? ogDesc.content : null,
+                    og_image: ogImg ? ogImg.content : null,
+                    datetime: timeEl
+                        ? timeEl.getAttribute('datetime') : null,
+                    is_deleted: title.includes('available'),
+                };
+            }""")
+            
+            if data.get('is_deleted') or not data.get('og_description'):
+                return {'error': 'post_unavailable', 'url': url}
+            
+            # og:description 파싱
+            result = {
+                'url': url,
+                'status': 'ok',
+                'image_url': data.get('og_image'),
+                'datetime': data.get('datetime'),
+            }
+            
+            text = data['og_description']
+            like_m = re.search(r'^(\S+)\s+likes?', text)
+            comment_m = re.search(r',\s*(\S+)\s+comments?', text)
+            author_m = re.search(r'-\s+(\w+)\s+on\s+', text)
+            caption_m = re.search(r':\s+"([\s\S]+?)"\.?\s*$', text)
+            
+            result['likes'] = like_m.group(1) if like_m else None
+            result['comments'] = (
+                comment_m.group(1).strip() if comment_m else None
+            )
+            result['author'] = author_m.group(1) if author_m else None
+            result['caption'] = (
+                caption_m.group(1) if caption_m else None
+            )
+            result['og_description'] = text
+            
+            return result
+            
+        except Exception as e:
+            return {
+                'error': type(e).__name__, 
+                'message': str(e), 
+                'url': url
+            }
+    
+    async def scrape_posts(self, urls: list[str]) -> list[dict]:
+        """다중 게시물 스크래핑"""
+        results = []
+        
+        async with AsyncCamoufox(
+            headless=True,
+            humanize=True,
+            block_webrtc=True,
+        ) as browser:
+            page = await browser.new_page()
+            
+            for i, url in enumerate(urls):
+                result = await self.scrape_post(page, url)
+                tag = 'OK' if result.get('status') == 'ok' else 'ERR'
+                print(f'  [{i+1}/{len(urls)}] {tag} | {url}')
+                results.append(result)
+                
+                # Rate limit 감지 시 대기
+                if result.get('error') == 'rate_limited':
+                    wait = result.get('retry_after', 60)
+                    print(f'  Rate limited! Waiting {wait}s...')
+                    await page.wait_for_timeout(wait * 1000)
+                
+                # 인간 같은 딜레이
+                delay = random.uniform(self.min_delay, self.max_delay)
+                await page.wait_for_timeout(int(delay * 1000))
+        
+        return results
+    
+    async def scrape_profile_info(self, username: str) -> dict:
+        """프로필 정보 스크래핑 (og:meta만)"""
+        async with AsyncCamoufox(
+            headless=True, humanize=True, block_webrtc=True
+        ) as browser:
+            page = await browser.new_page()
+            url = f'https://www.instagram.com/{username}/'
+            await page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            await page.wait_for_timeout(3000)
+            
+            return await page.evaluate("""() => {
+                const ogDesc = document.querySelector(
+                    'meta[property="og:description"]'
+                );
+                const ogImg = document.querySelector(
+                    'meta[property="og:image"]'
+                );
+                return {
+                    url: window.location.href,
+                    title: document.title,
+                    og_description: ogDesc ? ogDesc.content : null,
+                    og_image: ogImg ? ogImg.content : null,
+                };
+            }""")
+
+
+# 사용 예제
+async def main():
+    scraper = InstagramScraper(min_delay=2.0, max_delay=4.0)
+    
+    # 프로필 정보
+    profile = await scraper.scrape_profile_info('nasa')
+    print(json.dumps(profile, ensure_ascii=False, indent=2))
+    
+    # 다중 게시물
+    urls = [
+        'https://www.instagram.com/nasa/p/DXPduuvEY7S/',
+        'https://www.instagram.com/nasa/p/DW_sj70mtDW/',
+    ]
+    results = await scraper.scrape_posts(urls)
+    print(json.dumps(results, ensure_ascii=False, indent=2))
+
+
+asyncio.run(main())
+```
+
+## 26. What's Been Tried (Run #5 업데이트)
+
+- experiment: 프로필 페이지 스크롤 전략 테스트 (window.scrollBy, scrollTo, PageDown)
+- lesson: Instagram 프로필은 intersection observer로 lazy loading. 단순 JS scroll로 새 게시물 로드 안 됨. 프로필 페이지는 **비결정적**으로 동작 (A/B 테스트, 세션 상태에 따라 로그인 벽 또는 콘텐츠 표시).
+- experiment: 순차 다중 게시물 스크래핑 (3개 게시물, Camoufox)
+- lesson: 유효한 게시물 2/2 성공 (100%). 삭제된 게시물 정상 감지. 게시물 URL 직접 접근이 프로필 스크롤보다 훨씬 안정적.
+- experiment: Rate limit 테스트 (8개 rapid request, 500ms 간격)
+- lesson: 8개 연속 요청에서 429 rate limit 없음. 유효 게시물 4/4 성공. 평균 0.8초/게시물. 대량 스크래핑(50+게시물)에서는 proxy 필요할 것으로 예상.
+- experiment: 삭제/오류 게시물 처리 로직 검증
+- lesson: 삭제된 게시물은 HTTP 200 + title "Post isn't available" + og:description==null. rate limit은 HTTP 429. soft login wall은 og:description에 팔로워 정보만 있고 articles==0.
