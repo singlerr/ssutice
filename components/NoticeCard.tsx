@@ -4,6 +4,9 @@ const PROVIDER_META: Record<string, { label: string; color: string }> = {
   university: { label: '숭실대', color: 'bg-blue-600 text-white' },
   cse: { label: '컴퓨터학부', color: 'bg-blue-900 text-white' },
   'student-council': { label: '총학생회', color: 'bg-green-800 text-white' },
+  'ig-focussu': { label: '총학생회 IG', color: 'bg-gradient-to-r from-purple-500 to-pink-500 text-white' },
+  'ig-it': { label: 'IT대학 IG', color: 'bg-gradient-to-r from-orange-500 to-pink-500 text-white' },
+  'ig-cse-council': { label: '컴학학생회 IG', color: 'bg-gradient-to-r from-yellow-500 to-pink-500 text-white' },
 };
 
 function formatDate(dateStr: string | null, createdAt: string) {

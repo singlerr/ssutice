@@ -28,7 +28,8 @@ export async function runAllScrapers(): Promise<number> {
           notice.articleNo,
           notice.title,
           notice.url,
-          notice.date
+          notice.date,
+          'thumbnail_url' in notice ? (notice as { thumbnail_url?: string }).thumbnail_url ?? null : null
         );
         if (isNew) {
           newCount++;

@@ -44,6 +44,15 @@ export async function initDb() {
   } catch {
     // Column already exists — safe to ignore
   }
+
+  // Migration: add thumbnail_url column for Instagram post thumbnails
+  try {
+    await getDb().execute(
+      `ALTER TABLE notices ADD COLUMN thumbnail_url TEXT`
+    );
+  } catch {
+    // Column already exists — safe to ignore
+  }
 }
 
 export type Notice = {
@@ -53,6 +62,7 @@ export type Notice = {
   title: string;
   url: string;
   date: string | null;
+  thumbnail_url?: string | null;
   created_at: string;
 };
 
@@ -107,6 +117,7 @@ export async function getNotices(
     title: r.title as string,
     url: r.url as string,
     date: r.date as string | null,
+    thumbnail_url: (r.thumbnail_url as string | null) ?? null,
     created_at: r.created_at as string,
   }));
 
@@ -119,18 +130,19 @@ export async function insertNotice(
   article_no: string,
   title: string,
   url: string,
-  date: string | null
+  date: string | null,
+  thumbnail_url: string | null = null
 ): Promise<boolean> {
   const db = getDb();
   const result = await db.execute({
-    sql: `INSERT OR IGNORE INTO notices (provider, article_no, title, url, date) VALUES (?, ?, ?, ?, ?)`,
-    args: [provider, article_no, title, url, date ?? null],
+    sql: `INSERT OR IGNORE INTO notices (provider, article_no, title, url, date, thumbnail_url) VALUES (?, ?, ?, ?, ?, ?)`,
+    args: [provider, article_no, title, url, date ?? null, thumbnail_url],
   });
   // Backfill date for existing rows that were inserted before date extraction was implemented
   if ((result.rowsAffected ?? 0) === 0 && date) {
     await db.execute({
-      sql: `UPDATE notices SET date = ? WHERE provider = ? AND article_no = ? AND date IS NULL`,
-      args: [date, provider, article_no],
+      sql: `UPDATE notices SET date = ?, thumbnail_url = COALESCE(thumbnail_url, ?) WHERE provider = ? AND article_no = ? AND date IS NULL`,
+      args: [date, thumbnail_url, provider, article_no],
     });
   }
   return (result.rowsAffected ?? 0) > 0;
